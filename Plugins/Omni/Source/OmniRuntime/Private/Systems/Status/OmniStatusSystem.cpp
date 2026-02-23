@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
+#include "Systems/OmniSystemMessageSchemas.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniStatusSystem, Log, All);
 
@@ -18,21 +19,6 @@ namespace OmniStatus
 	static const FName QueryIsExhausted(TEXT("IsExhausted"));
 	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName QueryGetStamina(TEXT("GetStamina"));
-
-	static bool TryParseBool(const FString& Value, bool& OutValue)
-	{
-		if (Value.Equals(TEXT("True"), ESearchCase::IgnoreCase) || Value == TEXT("1"))
-		{
-			OutValue = true;
-			return true;
-		}
-		if (Value.Equals(TEXT("False"), ESearchCase::IgnoreCase) || Value == TEXT("0"))
-		{
-			OutValue = false;
-			return true;
-		}
-		return false;
-	}
 }
 
 FName UOmniStatusSystem::GetSystemId_Implementation() const
@@ -130,11 +116,9 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 
 		if (Registry.IsValid())
 		{
-			FOmniEventMessage Event;
-			Event.SourceSystem = OmniStatus::SystemId;
-			Event.EventName = TEXT("Exhausted");
-			Event.Payload.Add(TEXT("State"), TEXT("True"));
-			Registry->BroadcastEvent(Event);
+			FOmniExhaustedEventSchema EventSchema;
+			EventSchema.SourceSystem = OmniStatus::SystemId;
+			Registry->BroadcastEvent(FOmniExhaustedEventSchema::ToMessage(EventSchema));
 		}
 
 		if (DebugSubsystem.IsValid())
@@ -149,11 +133,9 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 
 		if (Registry.IsValid())
 		{
-			FOmniEventMessage Event;
-			Event.SourceSystem = OmniStatus::SystemId;
-			Event.EventName = TEXT("ExhaustedCleared");
-			Event.Payload.Add(TEXT("State"), TEXT("False"));
-			Registry->BroadcastEvent(Event);
+			FOmniExhaustedClearedEventSchema EventSchema;
+			EventSchema.SourceSystem = OmniStatus::SystemId;
+			Registry->BroadcastEvent(FOmniExhaustedClearedEventSchema::ToMessage(EventSchema));
 		}
 
 		if (DebugSubsystem.IsValid())
@@ -167,43 +149,43 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 
 bool UOmniStatusSystem::HandleCommand_Implementation(const FOmniCommandMessage& Command)
 {
-	if (Command.CommandName == OmniStatus::CommandSetSprinting)
+	if (Command.CommandName == OmniMessageSchema::CommandSetSprinting)
 	{
-		const FString* SprintingValue = Command.Arguments.Find(TEXT("bSprinting"));
-		bool bNewSprinting = false;
-		if (!SprintingValue || !OmniStatus::TryParseBool(*SprintingValue, bNewSprinting))
+		FOmniSetSprintingCommandSchema ParsedSchema;
+		FString ParseError;
+		if (!FOmniSetSprintingCommandSchema::TryFromMessage(Command, ParsedSchema, ParseError))
 		{
 			return false;
 		}
 
-		SetSprinting(bNewSprinting);
+		SetSprinting(ParsedSchema.bSprinting);
 		return true;
 	}
 
 	if (Command.CommandName == OmniStatus::CommandConsumeStamina)
 	{
-		const FString* AmountValue = Command.Arguments.Find(TEXT("Amount"));
-		if (!AmountValue)
+		FString AmountValue;
+		if (!Command.TryGetArgument(TEXT("Amount"), AmountValue))
 		{
 			return false;
 		}
 
 		float Amount = 0.0f;
-		LexFromString(Amount, *(*AmountValue));
+		LexFromString(Amount, *AmountValue);
 		ConsumeStamina(Amount);
 		return true;
 	}
 
 	if (Command.CommandName == OmniStatus::CommandAddStamina)
 	{
-		const FString* AmountValue = Command.Arguments.Find(TEXT("Amount"));
-		if (!AmountValue)
+		FString AmountValue;
+		if (!Command.TryGetArgument(TEXT("Amount"), AmountValue))
 		{
 			return false;
 		}
 
 		float Amount = 0.0f;
-		LexFromString(Amount, *(*AmountValue));
+		LexFromString(Amount, *AmountValue);
 		AddStamina(Amount);
 		return true;
 	}
@@ -243,9 +225,9 @@ bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 		Query.bHandled = true;
 		Query.bSuccess = true;
 		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, MaxStaminaValue);
-		Query.Output.Add(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
-		Query.Output.Add(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStaminaValue));
-		Query.Output.Add(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
+		Query.SetOutputValue(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
+		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStaminaValue));
+		Query.SetOutputValue(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
 		return true;
 	}
 

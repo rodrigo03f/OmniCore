@@ -4,6 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
+#include "Systems/OmniSystemMessageSchemas.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniActionGateSystem, Log, All);
 
@@ -12,11 +13,7 @@ namespace OmniActionGate
 	static const FName CategoryName(TEXT("ActionGate"));
 	static const FName SourceName(TEXT("ActionGateSystem"));
 	static const FName SystemId(TEXT("ActionGate"));
-	static const FName CommandStartAction(TEXT("StartAction"));
-	static const FName CommandStopAction(TEXT("StopAction"));
-	static const FName QueryCanStartAction(TEXT("CanStartAction"));
 	static const FName QueryIsActionActive(TEXT("IsActionActive"));
-	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName StatusSystemId(TEXT("Status"));
 
 	static FString DecisionToResult(const FOmniActionGateDecision& Decision)
@@ -105,28 +102,29 @@ bool UOmniActionGateSystem::IsTickEnabled_Implementation() const
 
 bool UOmniActionGateSystem::HandleCommand_Implementation(const FOmniCommandMessage& Command)
 {
-	if (Command.CommandName == OmniActionGate::CommandStartAction)
+	if (Command.CommandName == OmniMessageSchema::CommandStartAction)
 	{
-		FName ActionId = NAME_None;
-		if (!TryParseActionId(Command.Arguments, ActionId))
+		FOmniStartActionCommandSchema ParsedSchema;
+		FString ParseError;
+		if (!FOmniStartActionCommandSchema::TryFromMessage(Command, ParsedSchema, ParseError))
 		{
 			return false;
 		}
 
 		FOmniActionGateDecision Decision;
-		return TryStartAction(ActionId, Decision);
+		return TryStartAction(ParsedSchema.ActionId, Decision);
 	}
 
-	if (Command.CommandName == OmniActionGate::CommandStopAction)
+	if (Command.CommandName == OmniMessageSchema::CommandStopAction)
 	{
-		FName ActionId = NAME_None;
-		if (!TryParseActionId(Command.Arguments, ActionId))
+		FOmniStopActionCommandSchema ParsedSchema;
+		FString ParseError;
+		if (!FOmniStopActionCommandSchema::TryFromMessage(Command, ParsedSchema, ParseError))
 		{
 			return false;
 		}
 
-		const FString* Reason = Command.Arguments.Find(TEXT("Reason"));
-		return StopAction(ActionId, Reason ? FName(**Reason) : NAME_None);
+		return StopAction(ParsedSchema.ActionId, ParsedSchema.Reason);
 	}
 
 	return Super::HandleCommand_Implementation(Command);
@@ -134,32 +132,30 @@ bool UOmniActionGateSystem::HandleCommand_Implementation(const FOmniCommandMessa
 
 bool UOmniActionGateSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 {
-	if (Query.QueryName == OmniActionGate::QueryCanStartAction)
+	if (Query.QueryName == OmniMessageSchema::QueryCanStartAction)
 	{
-		FName ActionId = NAME_None;
-		if (!TryParseActionId(Query.Arguments, ActionId))
+		FOmniCanStartActionQuerySchema ParsedSchema;
+		FString ParseError;
+		if (!FOmniCanStartActionQuerySchema::TryFromMessage(Query, ParsedSchema, ParseError))
 		{
 			Query.bHandled = true;
 			Query.bSuccess = false;
-			Query.Result = TEXT("Missing ActionId");
+			Query.Result = ParseError.IsEmpty() ? TEXT("Invalid query payload.") : ParseError;
 			return true;
 		}
 
 		FOmniActionGateDecision Decision;
-		const bool bAllowed = EvaluateStartAction(ActionId, Decision, false);
+		const bool bAllowed = EvaluateStartAction(ParsedSchema.ActionId, Decision, false);
 		Query.bHandled = true;
 		Query.bSuccess = bAllowed;
-		Query.Result = OmniActionGate::DecisionToResult(Decision);
-		Query.Output.Add(TEXT("Reason"), Decision.Reason);
-		Query.Output.Add(TEXT("ActionId"), ActionId.ToString());
-		Query.Output.Add(TEXT("Policy"), StaticEnum<EOmniActionPolicy>()->GetNameStringByValue(static_cast<int64>(Decision.Policy)));
+		Query.Result = Decision.Reason;
 		return true;
 	}
 
 	if (Query.QueryName == OmniActionGate::QueryIsActionActive)
 	{
 		FName ActionId = NAME_None;
-		if (!TryParseActionId(Query.Arguments, ActionId))
+		if (!TryParseActionId(Query, ActionId))
 		{
 			Query.bHandled = true;
 			Query.bSuccess = false;
@@ -318,15 +314,19 @@ FGameplayTagContainer UOmniActionGateSystem::BuildCurrentBlockingContext() const
 
 	if (Registry.IsValid())
 	{
-		FOmniQueryMessage Query;
-		Query.SourceSystem = OmniActionGate::SystemId;
-		Query.TargetSystem = OmniActionGate::StatusSystemId;
-		Query.QueryName = OmniActionGate::QueryGetStateTagsCsv;
+		FOmniGetStateTagsCsvQuerySchema RequestSchema;
+		RequestSchema.SourceSystem = OmniActionGate::SystemId;
+		FOmniQueryMessage Query = FOmniGetStateTagsCsvQuerySchema::ToMessage(RequestSchema);
 
-		if (Registry->ExecuteQuery(Query) && Query.bSuccess && !Query.Result.IsEmpty())
+		FOmniGetStateTagsCsvQuerySchema ResponseSchema;
+		FString ParseError;
+		if (Registry->ExecuteQuery(Query)
+			&& Query.bSuccess
+			&& FOmniGetStateTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError)
+			&& !ResponseSchema.TagsCsv.IsEmpty())
 		{
 			TArray<FString> TagStrings;
-			Query.Result.ParseIntoArray(TagStrings, TEXT(","), true);
+			ResponseSchema.TagsCsv.ParseIntoArray(TagStrings, TEXT(","), true);
 			for (FString TagString : TagStrings)
 			{
 				TagString.TrimStartAndEndInline();
@@ -434,15 +434,15 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 	return true;
 }
 
-bool UOmniActionGateSystem::TryParseActionId(const TMap<FName, FString>& Arguments, FName& OutActionId)
+bool UOmniActionGateSystem::TryParseActionId(const FOmniQueryMessage& Query, FName& OutActionId)
 {
-	const FString* ActionValue = Arguments.Find(TEXT("ActionId"));
-	if (!ActionValue || ActionValue->IsEmpty())
+	FString ActionValue;
+	if (!Query.TryGetArgument(TEXT("ActionId"), ActionValue) || ActionValue.IsEmpty())
 	{
 		return false;
 	}
 
-	OutActionId = FName(**ActionValue);
+	OutActionId = FName(*ActionValue);
 	return OutActionId != NAME_None;
 }
 
@@ -512,8 +512,8 @@ void UOmniActionGateSystem::PublishDecision(const FOmniActionGateDecision& Decis
 		FOmniEventMessage Event;
 		Event.SourceSystem = OmniActionGate::SystemId;
 		Event.EventName = Decision.bAllowed ? TEXT("ActionAllowed") : TEXT("ActionDenied");
-		Event.Payload.Add(TEXT("ActionId"), Decision.ActionId.ToString());
-		Event.Payload.Add(TEXT("Reason"), Decision.Reason);
+		Event.SetPayloadValue(TEXT("ActionId"), Decision.ActionId.ToString());
+		Event.SetPayloadValue(TEXT("Reason"), Decision.Reason);
 		Registry->BroadcastEvent(Event);
 	}
 

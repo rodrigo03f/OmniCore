@@ -2,6 +2,7 @@
 
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniRuntimeSystem.h"
+#include "Systems/OmniSystemMessageSchemas.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniRegistry, Log, All);
 
@@ -155,6 +156,21 @@ bool UOmniSystemRegistrySubsystem::DispatchCommand(const FOmniCommandMessage& Co
 		return false;
 	}
 
+	FString ValidationError;
+	if (!FOmniMessageSchemaValidator::ValidateCommand(Command, ValidationError))
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("DispatchCommand: invalid payload. Source=%s Target=%s Command=%s Error=%s"),
+			*Command.SourceSystem.ToString(),
+			*Command.TargetSystem.ToString(),
+			*Command.CommandName.ToString(),
+			*ValidationError
+		);
+		return false;
+	}
+
 	UOmniRuntimeSystem* TargetSystem = GetSystemById(Command.TargetSystem);
 	if (!TargetSystem)
 	{
@@ -176,13 +192,25 @@ bool UOmniSystemRegistrySubsystem::DispatchCommand(const FOmniCommandMessage& Co
 
 bool UOmniSystemRegistrySubsystem::ExecuteQuery(FOmniQueryMessage& Query)
 {
-	Query.bHandled = false;
-	Query.bSuccess = false;
-	Query.Result.Reset();
-	Query.Output.Reset();
+	Query.ResetResponse();
 
 	if (!bRegistryInitialized || Query.TargetSystem == NAME_None)
 	{
+		return false;
+	}
+
+	FString ValidationError;
+	if (!FOmniMessageSchemaValidator::ValidateQuery(Query, ValidationError))
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("ExecuteQuery: invalid payload. Source=%s Target=%s Query=%s Error=%s"),
+			*Query.SourceSystem.ToString(),
+			*Query.TargetSystem.ToString(),
+			*Query.QueryName.ToString(),
+			*ValidationError
+		);
 		return false;
 	}
 
@@ -211,6 +239,20 @@ void UOmniSystemRegistrySubsystem::BroadcastEvent(const FOmniEventMessage& Event
 {
 	if (!bRegistryInitialized)
 	{
+		return;
+	}
+
+	FString ValidationError;
+	if (!FOmniMessageSchemaValidator::ValidateEvent(Event, ValidationError))
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("BroadcastEvent: invalid payload. Source=%s Event=%s Error=%s"),
+			*Event.SourceSystem.ToString(),
+			*Event.EventName.ToString(),
+			*ValidationError
+		);
 		return;
 	}
 

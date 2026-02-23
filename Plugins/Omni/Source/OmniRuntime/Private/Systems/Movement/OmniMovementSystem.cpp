@@ -8,6 +8,7 @@
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniClockSubsystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
+#include "Systems/OmniSystemMessageSchemas.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniMovementSystem, Log, All);
 
@@ -18,26 +19,6 @@ namespace OmniMovement
 	static const FName SystemId(TEXT("Movement"));
 	static const FName ActionGateSystemId(TEXT("ActionGate"));
 	static const FName StatusSystemId(TEXT("Status"));
-	static const FName QueryCanStartAction(TEXT("CanStartAction"));
-	static const FName QueryIsExhausted(TEXT("IsExhausted"));
-	static const FName CommandStartAction(TEXT("StartAction"));
-	static const FName CommandStopAction(TEXT("StopAction"));
-	static const FName CommandSetSprinting(TEXT("SetSprinting"));
-
-	static bool TryParseBoolString(const FString& Value, bool& OutValue)
-	{
-		if (Value.Equals(TEXT("True"), ESearchCase::IgnoreCase) || Value == TEXT("1"))
-		{
-			OutValue = true;
-			return true;
-		}
-		if (Value.Equals(TEXT("False"), ESearchCase::IgnoreCase) || Value == TEXT("0"))
-		{
-			OutValue = false;
-			return true;
-		}
-		return false;
-	}
 }
 
 FName UOmniMovementSystem::GetSystemId_Implementation() const
@@ -156,7 +137,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 {
 	Super::HandleEvent_Implementation(Event);
 
-	if (Event.SourceSystem == OmniMovement::StatusSystemId && Event.EventName == TEXT("Exhausted"))
+	if (Event.SourceSystem == OmniMovement::StatusSystemId && Event.EventName == OmniMessageSchema::EventExhausted)
 	{
 		if (bIsSprinting)
 		{
@@ -290,23 +271,23 @@ bool UOmniMovementSystem::QueryStatusIsExhausted() const
 		return false;
 	}
 
-	FOmniQueryMessage Query;
-	Query.SourceSystem = OmniMovement::SystemId;
-	Query.TargetSystem = OmniMovement::StatusSystemId;
-	Query.QueryName = OmniMovement::QueryIsExhausted;
+	FOmniIsExhaustedQuerySchema RequestSchema;
+	RequestSchema.SourceSystem = OmniMovement::SystemId;
+	FOmniQueryMessage Query = FOmniIsExhaustedQuerySchema::ToMessage(RequestSchema);
 
 	if (!Registry->ExecuteQuery(Query) || !Query.bSuccess)
 	{
 		return false;
 	}
 
-	bool bExhausted = false;
-	if (!OmniMovement::TryParseBoolString(Query.Result, bExhausted))
+	FOmniIsExhaustedQuerySchema ResponseSchema;
+	FString ParseError;
+	if (!FOmniIsExhaustedQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
 	{
 		return false;
 	}
 
-	return bExhausted;
+	return ResponseSchema.bExhausted;
 }
 
 void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const
@@ -316,12 +297,10 @@ void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const
 		return;
 	}
 
-	FOmniCommandMessage Command;
-	Command.SourceSystem = OmniMovement::SystemId;
-	Command.TargetSystem = OmniMovement::StatusSystemId;
-	Command.CommandName = OmniMovement::CommandSetSprinting;
-	Command.Arguments.Add(TEXT("bSprinting"), bSprinting ? TEXT("True") : TEXT("False"));
-	Registry->DispatchCommand(Command);
+	FOmniSetSprintingCommandSchema CommandSchema;
+	CommandSchema.SourceSystem = OmniMovement::SystemId;
+	CommandSchema.bSprinting = bSprinting;
+	Registry->DispatchCommand(FOmniSetSprintingCommandSchema::ToMessage(CommandSchema));
 }
 
 bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
@@ -331,11 +310,10 @@ bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
 		return false;
 	}
 
-	FOmniQueryMessage Query;
-	Query.SourceSystem = OmniMovement::SystemId;
-	Query.TargetSystem = OmniMovement::ActionGateSystemId;
-	Query.QueryName = OmniMovement::QueryCanStartAction;
-	Query.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
+	FOmniCanStartActionQuerySchema RequestSchema;
+	RequestSchema.SourceSystem = OmniMovement::SystemId;
+	RequestSchema.ActionId = SprintActionId;
+	FOmniQueryMessage Query = FOmniCanStartActionQuerySchema::ToMessage(RequestSchema);
 
 	const bool bHandled = Registry->ExecuteQuery(Query);
 	if (!bHandled)
@@ -343,13 +321,19 @@ bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
 		return false;
 	}
 
-	if (OutReason)
+	FOmniCanStartActionQuerySchema ResponseSchema;
+	FString ParseError;
+	if (!FOmniCanStartActionQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
 	{
-		const FString* Reason = Query.Output.Find(TEXT("Reason"));
-		*OutReason = Reason ? *Reason : Query.Result;
+		return false;
 	}
 
-	return Query.bSuccess;
+	if (OutReason)
+	{
+		*OutReason = ResponseSchema.Reason;
+	}
+
+	return ResponseSchema.bAllowed;
 }
 
 bool UOmniMovementSystem::DispatchStartSprint() const
@@ -359,12 +343,10 @@ bool UOmniMovementSystem::DispatchStartSprint() const
 		return false;
 	}
 
-	FOmniCommandMessage Command;
-	Command.SourceSystem = OmniMovement::SystemId;
-	Command.TargetSystem = OmniMovement::ActionGateSystemId;
-	Command.CommandName = OmniMovement::CommandStartAction;
-	Command.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
-	return Registry->DispatchCommand(Command);
+	FOmniStartActionCommandSchema CommandSchema;
+	CommandSchema.SourceSystem = OmniMovement::SystemId;
+	CommandSchema.ActionId = SprintActionId;
+	return Registry->DispatchCommand(FOmniStartActionCommandSchema::ToMessage(CommandSchema));
 }
 
 bool UOmniMovementSystem::DispatchStopSprint(const FName Reason) const
@@ -374,14 +356,9 @@ bool UOmniMovementSystem::DispatchStopSprint(const FName Reason) const
 		return false;
 	}
 
-	FOmniCommandMessage Command;
-	Command.SourceSystem = OmniMovement::SystemId;
-	Command.TargetSystem = OmniMovement::ActionGateSystemId;
-	Command.CommandName = OmniMovement::CommandStopAction;
-	Command.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
-	if (Reason != NAME_None)
-	{
-		Command.Arguments.Add(TEXT("Reason"), Reason.ToString());
-	}
-	return Registry->DispatchCommand(Command);
+	FOmniStopActionCommandSchema CommandSchema;
+	CommandSchema.SourceSystem = OmniMovement::SystemId;
+	CommandSchema.ActionId = SprintActionId;
+	CommandSchema.Reason = Reason;
+	return Registry->DispatchCommand(FOmniStopActionCommandSchema::ToMessage(CommandSchema));
 }

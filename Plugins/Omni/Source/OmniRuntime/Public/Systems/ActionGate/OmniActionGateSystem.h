@@ -51,7 +51,7 @@ private:
 	void RebuildDefinitionMap();
 	FGameplayTagContainer BuildCurrentBlockingContext() const;
 	bool EvaluateStartAction(FName ActionId, FOmniActionGateDecision& OutDecision, bool bApplyChanges);
-	static bool TryParseActionId(const TMap<FName, FString>& Arguments, FName& OutActionId);
+	static bool TryParseActionId(const FOmniQueryMessage& Query, FName& OutActionId);
 	void AddActionLocks(const FOmniActionDefinition& Definition);
 	void RemoveActionLocks(const FOmniActionDefinition& Definition);
 	void PublishTelemetry();
