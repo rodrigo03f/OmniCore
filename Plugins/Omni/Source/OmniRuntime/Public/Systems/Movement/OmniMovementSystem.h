@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Systems/Movement/OmniMovementData.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniMovementSystem.generated.h"
 
@@ -42,6 +43,8 @@ public:
 	float GetAutoSprintRemainingSeconds() const;
 
 private:
+	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest);
+	void BuildDevFallbackSettings();
 	void StartSprinting();
 	void StopSprinting(FName Reason);
 	void PublishTelemetry() const;
@@ -53,14 +56,8 @@ private:
 	bool DispatchStopSprint(FName Reason) const;
 
 private:
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Movement")
-	FName SprintActionId = TEXT("Movement.Sprint");
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Movement", meta = (ClampMin = "0.05"))
-	float FailedRetryIntervalSeconds = 0.25f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Movement")
-	bool bUseKeyboardShiftAsSprintRequest = true;
+	UPROPERTY(Transient)
+	FOmniMovementSettings RuntimeSettings;
 
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;

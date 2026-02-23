@@ -19,6 +19,10 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.SystemId = TEXT("Status");
 		Entry.SystemClass = UOmniStatusSystem::StaticClass();
 		Entry.bEnabled = true;
+		Entry.SetSetting(
+			TEXT("StatusProfileAssetPath"),
+			TEXT("/Game/Omni/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default")
+		);
 	}
 
 	{
@@ -27,7 +31,10 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.SystemClass = UOmniActionGateSystem::StaticClass();
 		Entry.bEnabled = true;
 		Entry.Dependencies = { TEXT("Status") };
-		Entry.SetSetting(TEXT("ActionProfileClassPath"), TEXT("/Script/OmniRuntime.OmniDevActionProfile"));
+		Entry.SetSetting(
+			TEXT("ActionProfileAssetPath"),
+			TEXT("/Game/Omni/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default")
+		);
 	}
 
 	{
@@ -36,5 +43,9 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.SystemClass = UOmniMovementSystem::StaticClass();
 		Entry.bEnabled = true;
 		Entry.Dependencies = { TEXT("ActionGate"), TEXT("Status") };
+		Entry.SetSetting(
+			TEXT("MovementProfileAssetPath"),
+			TEXT("/Game/Omni/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default")
+		);
 	}
 }

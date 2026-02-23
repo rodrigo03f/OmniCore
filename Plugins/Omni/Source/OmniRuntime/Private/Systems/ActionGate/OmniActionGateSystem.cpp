@@ -289,6 +289,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* 
 	}
 
 	UOmniActionProfile* LoadedProfile = nullptr;
+	bool bLoadedFromClassPath = false;
 
 	FString ProfileAssetPathValue;
 	if (SystemEntry->TryGetSetting(OmniActionGate::ManifestSettingActionProfileAssetPath, ProfileAssetPathValue))
@@ -331,6 +332,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* 
 				else
 				{
 					LoadedProfile = NewObject<UOmniActionProfile>(this, LoadedClass, NAME_None, RF_Transient);
+					bLoadedFromClassPath = true;
 				}
 			}
 		}
@@ -355,7 +357,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* 
 	}
 
 	DefaultDefinitions = MoveTemp(LoadedDefinitions);
-	if (LoadedProfile->GetClass()->IsChildOf(UOmniDevActionProfile::StaticClass()))
+	if (bLoadedFromClassPath || LoadedProfile->GetClass()->IsChildOf(UOmniDevActionProfile::StaticClass()))
 	{
 		UE_LOG(
 			LogOmniActionGateSystem,

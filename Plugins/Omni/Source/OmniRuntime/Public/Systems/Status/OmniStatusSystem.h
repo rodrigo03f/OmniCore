@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Systems/Status/OmniStatusData.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniStatusSystem.generated.h"
 
@@ -49,24 +50,14 @@ public:
 	void AddStamina(float Amount);
 
 private:
+	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest);
+	void BuildDevFallbackSettings();
 	void UpdateStateTags();
 	void PublishTelemetry();
 
 private:
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Status|Stamina", meta = (ClampMin = "1.0"))
-	float MaxStaminaValue = 100.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Status|Stamina", meta = (ClampMin = "0.1"))
-	float SprintDrainPerSecond = 25.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Status|Stamina", meta = (ClampMin = "0.1"))
-	float RegenPerSecond = 18.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Status|Stamina", meta = (ClampMin = "0.0"))
-	float RegenDelaySeconds = 0.8f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Omni|Status|Stamina", meta = (ClampMin = "0.0"))
-	float ExhaustRecoverThreshold = 22.0f;
+	UPROPERTY(Transient)
+	FOmniStatusSettings RuntimeSettings;
 
 	UPROPERTY(Transient)
 	float CurrentStamina = 100.0f;

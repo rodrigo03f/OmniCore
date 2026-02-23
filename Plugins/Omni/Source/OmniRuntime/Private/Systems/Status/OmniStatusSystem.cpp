@@ -3,8 +3,10 @@
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
+#include "Profile/OmniStatusProfile.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
+#include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniStatusSystem, Log, All);
 
@@ -19,6 +21,8 @@ namespace OmniStatus
 	static const FName QueryIsExhausted(TEXT("IsExhausted"));
 	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName QueryGetStamina(TEXT("GetStamina"));
+	static const FName ManifestSettingStatusProfileAssetPath(TEXT("StatusProfileAssetPath"));
+	static const FName ManifestSettingStatusProfileClassPath(TEXT("StatusProfileClassPath"));
 }
 
 FName UOmniStatusSystem::GetSystemId_Implementation() const
@@ -44,11 +48,22 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 		}
 	}
 
-	ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
-	CurrentStamina = MaxStaminaValue;
+	RuntimeSettings = FOmniStatusSettings();
+	if (!TryLoadSettingsFromManifest(Manifest))
+	{
+		BuildDevFallbackSettings();
+	}
+
+	ExhaustedTag = RuntimeSettings.ExhaustedTag;
+	if (!ExhaustedTag.IsValid())
+	{
+		ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
+	}
+
+	CurrentStamina = RuntimeSettings.MaxStamina;
 	bExhausted = false;
 	bSprinting = false;
-	TimeSinceLastConsumption = RegenDelaySeconds;
+	TimeSinceLastConsumption = RuntimeSettings.RegenDelaySeconds;
 	UpdateStateTags();
 	PublishTelemetry();
 
@@ -98,14 +113,14 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 
 	if (bSprinting)
 	{
-		ConsumeStamina(SprintDrainPerSecond * DeltaTime);
+		ConsumeStamina(RuntimeSettings.SprintDrainPerSecond * DeltaTime);
 	}
 	else
 	{
 		TimeSinceLastConsumption += DeltaTime;
-		if (TimeSinceLastConsumption >= RegenDelaySeconds && CurrentStamina < MaxStaminaValue)
+		if (TimeSinceLastConsumption >= RuntimeSettings.RegenDelaySeconds && CurrentStamina < RuntimeSettings.MaxStamina)
 		{
-			AddStamina(RegenPerSecond * DeltaTime);
+			AddStamina(RuntimeSettings.RegenPerSecond * DeltaTime);
 		}
 	}
 
@@ -126,7 +141,7 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 			DebugSubsystem->LogWarning(OmniStatus::CategoryName, TEXT("Entrou em estado Exhausted"), OmniStatus::SourceName);
 		}
 	}
-	else if (bExhausted && CurrentStamina >= ExhaustRecoverThreshold)
+	else if (bExhausted && CurrentStamina >= RuntimeSettings.ExhaustRecoverThreshold)
 	{
 		bExhausted = false;
 		UpdateStateTags();
@@ -224,9 +239,9 @@ bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 	{
 		Query.bHandled = true;
 		Query.bSuccess = true;
-		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, MaxStaminaValue);
+		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, RuntimeSettings.MaxStamina);
 		Query.SetOutputValue(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
-		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStaminaValue));
+		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), RuntimeSettings.MaxStamina));
 		Query.SetOutputValue(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
 		return true;
 	}
@@ -247,17 +262,17 @@ float UOmniStatusSystem::GetCurrentStamina() const
 
 float UOmniStatusSystem::GetMaxStamina() const
 {
-	return MaxStaminaValue;
+	return RuntimeSettings.MaxStamina;
 }
 
 float UOmniStatusSystem::GetStaminaNormalized() const
 {
-	if (MaxStaminaValue <= KINDA_SMALL_NUMBER)
+	if (RuntimeSettings.MaxStamina <= KINDA_SMALL_NUMBER)
 	{
 		return 0.0f;
 	}
 
-	return CurrentStamina / MaxStaminaValue;
+	return CurrentStamina / RuntimeSettings.MaxStamina;
 }
 
 bool UOmniStatusSystem::IsExhausted() const
@@ -304,7 +319,152 @@ void UOmniStatusSystem::AddStamina(const float Amount)
 		return;
 	}
 
-	CurrentStamina = FMath::Min(MaxStaminaValue, CurrentStamina + Amount);
+	CurrentStamina = FMath::Min(RuntimeSettings.MaxStamina, CurrentStamina + Amount);
+}
+
+bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifest)
+{
+	if (!Manifest)
+	{
+		return false;
+	}
+
+	const FName RuntimeSystemId = GetSystemId();
+	const FOmniSystemManifestEntry* SystemEntry = Manifest->FindEntryById(RuntimeSystemId);
+	if (!SystemEntry)
+	{
+		SystemEntry = Manifest->Systems.FindByPredicate(
+			[this](const FOmniSystemManifestEntry& Entry)
+			{
+				UClass* LoadedClass = Entry.SystemClass.LoadSynchronous();
+				return LoadedClass == GetClass();
+			}
+		);
+	}
+	if (!SystemEntry)
+	{
+		return false;
+	}
+
+	UOmniStatusProfile* LoadedProfile = nullptr;
+	bool bLoadedFromClassPath = false;
+
+	FString ProfileAssetPathValue;
+	if (SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileAssetPath, ProfileAssetPathValue))
+	{
+		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
+		if (!ProfileAssetPath.IsNull())
+		{
+			UObject* LoadedObject = ProfileAssetPath.TryLoad();
+			LoadedProfile = Cast<UOmniStatusProfile>(LoadedObject);
+			if (!LoadedProfile)
+			{
+				UE_LOG(
+					LogOmniStatusSystem,
+					Warning,
+					TEXT("StatusProfileAssetPath invalido para Status: %s"),
+					*ProfileAssetPath.ToString()
+				);
+			}
+		}
+	}
+
+	if (!LoadedProfile)
+	{
+		FString ProfileClassPathValue;
+		if (SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileClassPath, ProfileClassPathValue))
+		{
+			const FSoftClassPath ProfileClassPath(ProfileClassPathValue);
+			if (!ProfileClassPath.IsNull())
+			{
+				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniStatusProfile>();
+				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniStatusProfile::StaticClass()))
+				{
+					UE_LOG(
+						LogOmniStatusSystem,
+						Warning,
+						TEXT("StatusProfileClassPath invalido para Status: %s"),
+						*ProfileClassPath.ToString()
+					);
+				}
+				else
+				{
+					LoadedProfile = NewObject<UOmniStatusProfile>(this, LoadedClass, NAME_None, RF_Transient);
+					bLoadedFromClassPath = true;
+				}
+			}
+		}
+	}
+
+	if (!LoadedProfile)
+	{
+		return false;
+	}
+
+	FOmniStatusSettings LoadedSettings;
+	if (!LoadedProfile->ResolveSettings(LoadedSettings))
+	{
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("Status profile sem configuracao utilizavel: %s"),
+			*GetNameSafe(LoadedProfile)
+		);
+		return false;
+	}
+
+	FString ValidationError;
+	if (!LoadedSettings.IsValid(ValidationError))
+	{
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("Status settings invalidos no profile %s: %s"),
+			*GetNameSafe(LoadedProfile),
+			*ValidationError
+		);
+		return false;
+	}
+
+	RuntimeSettings = MoveTemp(LoadedSettings);
+	if (bLoadedFromClassPath || LoadedProfile->GetClass()->IsChildOf(UOmniDevStatusProfile::StaticClass()))
+	{
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("Status settings loaded from DEV_FALLBACK profile class: %s"),
+			*LoadedProfile->GetClass()->GetPathName()
+		);
+	}
+	else
+	{
+		UE_LOG(
+			LogOmniStatusSystem,
+			Log,
+			TEXT("Status settings loaded from profile: %s"),
+			*GetNameSafe(LoadedProfile)
+		);
+	}
+
+	return true;
+}
+
+void UOmniStatusSystem::BuildDevFallbackSettings()
+{
+	UOmniDevStatusProfile* DevProfile = NewObject<UOmniDevStatusProfile>(this, NAME_None, RF_Transient);
+	if (DevProfile)
+	{
+		FOmniStatusSettings LoadedSettings;
+		if (DevProfile->ResolveSettings(LoadedSettings))
+		{
+			RuntimeSettings = MoveTemp(LoadedSettings);
+			UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK profile instance."));
+			return;
+		}
+	}
+
+	RuntimeSettings = FOmniStatusSettings();
+	UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK inline C++."));
 }
 
 void UOmniStatusSystem::UpdateStateTags()
@@ -323,7 +483,7 @@ void UOmniStatusSystem::PublishTelemetry()
 		return;
 	}
 
-	DebugSubsystem->SetMetric(TEXT("Status.Stamina"), FString::Printf(TEXT("%.1f/%.1f"), CurrentStamina, MaxStaminaValue));
+	DebugSubsystem->SetMetric(TEXT("Status.Stamina"), FString::Printf(TEXT("%.1f/%.1f"), CurrentStamina, RuntimeSettings.MaxStamina));
 	DebugSubsystem->SetMetric(TEXT("Status.Exhausted"), bExhausted ? TEXT("True") : TEXT("False"));
 	DebugSubsystem->SetMetric(TEXT("Status.Sprinting"), bSprinting ? TEXT("True") : TEXT("False"));
 }
