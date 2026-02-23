@@ -152,12 +152,15 @@ Cobertura:
 - getters por referencia para esses maps (`GetSettings/GetPayload/GetArguments/GetOutput`)
 - campos `TMap` em secao publica de headers `Public/**` (com whitelist explicita)
 - `OmniOfficialManifest.cpp` precisa apontar para os 3 profile asset paths canonicos
+- `OmniOfficialManifest.cpp` deve usar root temporario unico de dados (`/Game/Data`) sem mistura com `/Game/Omni/Data`
 - checagem de existencia dos 6 assets canonicos em `Content/Data/**` (local por padrao)
+- bloqueio de `ActionId` com prefixo `Input.*` nos assets default de Action (`Library/Profile`)
+- validacao de link de Profile -> Library nos 3 perfis default (token esperado no `.uasset`)
 - heuristica para detectar chamada de fallback sem guarda de `omni.devdefaults`
 
 Notas CI:
 
-- em CI a checagem de arquivos `.uasset` eh ignorada por padrao (para nao quebrar pipeline sem content checkout completo)
+- em CI as checagens de `.uasset` (presenca de assets, Input.* e links Profile->Library) sao ignoradas por padrao (para nao quebrar pipeline sem content checkout completo)
 - para forcar checagem de assets no ambiente atual:
 
 ```powershell

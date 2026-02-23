@@ -21,6 +21,7 @@ namespace OmniActionGate
 	static const FName ManifestSettingActionProfileAssetPath(TEXT("ActionProfileAssetPath"));
 	static const FName ManifestSettingActionProfileClassPath(TEXT("ActionProfileClassPath"));
 	static const TCHAR* DefaultActionProfileAssetPath = TEXT("/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default");
+	static const TCHAR* DisallowedActionIdPrefix = TEXT("Input.");
 	static const FName DebugMetricProfileAction(TEXT("Omni.Profile.Action"));
 
 	static FString DecisionToResult(const FOmniActionGateDecision& Decision)
@@ -502,6 +503,25 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 
 	TArray<FOmniActionDefinition> LoadedDefinitions;
 	LoadedProfile->ResolveDefinitions(LoadedDefinitions);
+	for (const FOmniActionDefinition& LoadedDefinition : LoadedDefinitions)
+	{
+		if (LoadedDefinition.ActionId == NAME_None)
+		{
+			continue;
+		}
+
+		const FString ActionIdText = LoadedDefinition.ActionId.ToString();
+		if (ActionIdText.StartsWith(OmniActionGate::DisallowedActionIdPrefix, ESearchCase::CaseSensitive))
+		{
+			OutError = FString::Printf(
+				TEXT("Action profile '%s' contains disallowed ActionId '%s' for SystemId '%s'. ActionId must be gameplay/system-level (example: Movement.Sprint), not Input.*"),
+				*GetNameSafe(LoadedProfile),
+				*ActionIdText,
+				*RuntimeSystemId.ToString()
+			);
+			return false;
+		}
+	}
 	if (LoadedDefinitions.Num() == 0)
 	{
 		OutError = FString::Printf(

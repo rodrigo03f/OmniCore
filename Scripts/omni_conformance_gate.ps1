@@ -58,6 +58,47 @@ function Is-AllowedPath {
     return $false
 }
 
+function Get-FileTextProjections {
+    param([string]$FilePath)
+
+    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+    return [PSCustomObject]@{
+        Ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+        Utf16 = [System.Text.Encoding]::Unicode.GetString($bytes)
+    }
+}
+
+function Test-BinaryTextContains {
+    param(
+        [string]$FilePath,
+        [string]$Needle
+    )
+
+    if (-not (Test-Path $FilePath)) {
+        return $false
+    }
+
+    $projection = Get-FileTextProjections -FilePath $FilePath
+    return $projection.Ascii.Contains($Needle) -or $projection.Utf16.Contains($Needle)
+}
+
+function Get-BinaryRegexMatches {
+    param(
+        [string]$FilePath,
+        [string]$Regex
+    )
+
+    if (-not (Test-Path $FilePath)) {
+        return @()
+    }
+
+    $projection = Get-FileTextProjections -FilePath $FilePath
+    $matches = @()
+    $matches += [regex]::Matches($projection.Ascii, $Regex) | ForEach-Object { $_.Value }
+    $matches += [regex]::Matches($projection.Utf16, $Regex) | ForEach-Object { $_.Value }
+    return $matches | Select-Object -Unique
+}
+
 $projectRoot = Resolve-ProjectRoot -InputRoot $ProjectRoot
 Write-Host "Conformance gate root: $projectRoot" -ForegroundColor Green
 $isCiRun = (($env:CI -eq "true") -or ($env:GITHUB_ACTIONS -eq "true"))
@@ -69,6 +110,8 @@ $expectedManifestProfileAssetPaths = @(
     "/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default",
     "/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default"
 )
+$expectedManifestRoot = "/Game/Data"
+$manifestDataRootRegex = "/Game(?:/[A-Za-z0-9_]+)*/Data/"
 $expectedContentAssets = @(
     "Content/Data/Action/DA_Omni_ActionLibrary_Default.uasset",
     "Content/Data/Action/DA_Omni_ActionProfile_Default.uasset",
@@ -77,6 +120,16 @@ $expectedContentAssets = @(
     "Content/Data/Movement/DA_Omni_MovementLibrary_Default.uasset",
     "Content/Data/Movement/DA_Omni_MovementProfile_Default.uasset"
 )
+$expectedProfileLibraryLinks = @{
+    "Content/Data/Action/DA_Omni_ActionProfile_Default.uasset" = "DA_Omni_ActionLibrary_Default"
+    "Content/Data/Status/DA_Omni_StatusProfile_Default.uasset" = "DA_Omni_StatusLibrary_Default"
+    "Content/Data/Movement/DA_Omni_MovementProfile_Default.uasset" = "DA_Omni_MovementLibrary_Default"
+}
+$defaultActionDataAssets = @(
+    "Content/Data/Action/DA_Omni_ActionLibrary_Default.uasset",
+    "Content/Data/Action/DA_Omni_ActionProfile_Default.uasset"
+)
+$bannedActionIdRegex = "\bInput\.[A-Za-z0-9_]+\b"
 
 $files = @()
 foreach ($sourceRoot in $SourceRoots) {
@@ -248,6 +301,21 @@ if (-not (Test-Path $manifestCppPath)) {
 }
 else {
     $manifestContent = Get-Content -Raw -Path $manifestCppPath
+
+    $manifestRoots = @([regex]::Matches($manifestContent, $manifestDataRootRegex) |
+        ForEach-Object { $_.Value.TrimEnd("/") } |
+        Select-Object -Unique)
+
+    if ($manifestRoots.Count -eq 0) {
+        Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-root-missing" -Text "No /Game/*/Data root found in manifest profile settings."
+    }
+    elseif ($manifestRoots.Count -gt 1) {
+        Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-root-mixed" -Text ("Mixed data roots in manifest: " + ($manifestRoots -join ", ") + ". Use a single temporary root until Forge defines the user root.")
+    }
+    elseif ($manifestRoots[0] -ne $expectedManifestRoot) {
+        Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-root-unexpected" -Text ("Manifest root is '" + $manifestRoots[0] + "'. Expected temporary root: " + $expectedManifestRoot)
+    }
+
     foreach ($expectedPath in $expectedManifestProfileAssetPaths) {
         if ($manifestContent -notmatch [regex]::Escape($expectedPath)) {
             Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-profile-path-missing" -Text "Expected profile asset path not found: $expectedPath"
@@ -261,6 +329,26 @@ if ($shouldCheckContentAssets) {
         $absoluteAssetPath = Join-Path $projectRoot $relativeAssetPath
         if (-not (Test-Path $absoluteAssetPath)) {
             Add-Violation -Target ([ref]$violations) -File $relativeAssetPath -Line 0 -Rule "expected-content-asset-missing" -Text "Expected asset file is missing."
+        }
+    }
+
+    foreach ($profileRelativePath in $expectedProfileLibraryLinks.Keys) {
+        $profileAbsolutePath = Join-Path $projectRoot $profileRelativePath
+        $expectedLibraryToken = $expectedProfileLibraryLinks[$profileRelativePath]
+        if ((Test-Path $profileAbsolutePath) -and -not (Test-BinaryTextContains -FilePath $profileAbsolutePath -Needle $expectedLibraryToken)) {
+            Add-Violation -Target ([ref]$violations) -File $profileRelativePath -Line 0 -Rule "profile-library-link-missing" -Text ("Profile does not reference expected library token: " + $expectedLibraryToken)
+        }
+    }
+
+    foreach ($relativeActionAssetPath in $defaultActionDataAssets) {
+        $absoluteActionAssetPath = Join-Path $projectRoot $relativeActionAssetPath
+        if (-not (Test-Path $absoluteActionAssetPath)) {
+            continue
+        }
+
+        $bannedMatches = Get-BinaryRegexMatches -FilePath $absoluteActionAssetPath -Regex $bannedActionIdRegex
+        foreach ($bannedMatch in $bannedMatches) {
+            Add-Violation -Target ([ref]$violations) -File $relativeActionAssetPath -Line 0 -Rule "action-id-input-prefix-banned" -Text ("ActionId deve ser gameplay/system-level (ex: Movement.Sprint). Evite Input.*. Encontrado: " + $bannedMatch)
         }
     }
 }
