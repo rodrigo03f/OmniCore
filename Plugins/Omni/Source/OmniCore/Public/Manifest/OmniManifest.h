@@ -24,7 +24,13 @@ struct OMNICORE_API FOmniSystemManifestEntry
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Manifest")
 	TArray<FName> Dependencies;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Manifest")
+	void SetSetting(FName Key, const FString& Value);
+	bool TryGetSetting(FName Key, FString& OutValue) const;
+	bool HasSetting(FName Key) const;
+	TArray<FName> GetSettingKeysSnapshot() const;
+
+private:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Manifest", meta = (AllowPrivateAccess = "true"))
 	TMap<FName, FString> Settings;
 };
 

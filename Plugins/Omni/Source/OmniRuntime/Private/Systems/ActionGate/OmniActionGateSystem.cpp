@@ -290,9 +290,10 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* 
 
 	UOmniActionProfile* LoadedProfile = nullptr;
 
-	if (const FString* ProfileAssetPathValue = SystemEntry->Settings.Find(OmniActionGate::ManifestSettingActionProfileAssetPath))
+	FString ProfileAssetPathValue;
+	if (SystemEntry->TryGetSetting(OmniActionGate::ManifestSettingActionProfileAssetPath, ProfileAssetPathValue))
 	{
-		const FSoftObjectPath ProfileAssetPath(*ProfileAssetPathValue);
+		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
 		if (!ProfileAssetPath.IsNull())
 		{
 			UObject* LoadedObject = ProfileAssetPath.TryLoad();
@@ -311,9 +312,10 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* 
 
 	if (!LoadedProfile)
 	{
-		if (const FString* ProfileClassPathValue = SystemEntry->Settings.Find(OmniActionGate::ManifestSettingActionProfileClassPath))
+		FString ProfileClassPathValue;
+		if (SystemEntry->TryGetSetting(OmniActionGate::ManifestSettingActionProfileClassPath, ProfileClassPathValue))
 		{
-			const FSoftClassPath ProfileClassPath(*ProfileClassPathValue);
+			const FSoftClassPath ProfileClassPath(ProfileClassPathValue);
 			if (!ProfileClassPath.IsNull())
 			{
 				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniActionProfile>();

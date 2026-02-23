@@ -75,55 +75,90 @@ Codigos de saida:
 - `1` = ALERT
 - `2` = FAIL
 
-## 0) Build incremental (recomendado no dia a dia)
+## 0) Build levels oficiais
 
-Build rapido sem limpar caches/pastas:
+### 0.1) DEV (incremental)
+Uso: dia a dia (95% do tempo).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\build_incremental.ps1 -KillUnrealEditor
-```
-
-Sem regenerar project files:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\build_incremental.ps1 -KillUnrealEditor -SkipProjectFiles
-```
-
-## 0.5) Clean rebuild (usar so quando necessario)
-
-Normal (fast clean + project files + build):
+- nao limpa pastas
+- nao regenera project files
+- compila o target
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_normal.ps1 -KillUnrealEditor
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_build_dev.ps1 -KillUnrealEditor
 ```
 
-Note: this now runs Zen hygiene automatically before the clean/build steps.
+Metrica: `Total execution time` do UBT.
 
-Hard (includes extra cache cleanup):
+### 0.2) CARIMBO (clean de fase)
+Uso: fechar recorte/fase e marcar DONE.
+
+Limpa apenas:
+
+- `Project\Intermediate`
+- `Project\Binaries`
+- `Plugins\Omni\Intermediate`
+- `Plugins\Omni\Binaries`
+
+Depois compila sem regenerar project files.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_hard.ps1 -KillUnrealEditor
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_build_carimbo.ps1 -KillUnrealEditor
 ```
 
-Optional hard mode global DDC purge (slow):
+Metrica: `Total execution time` do UBT.
+
+### 0.3) NUCLEAR (higiene)
+Uso: troubleshooting pesado.
+
+Inclui:
+
+- zen hygiene
+- limpeza das pastas do CARIMBO
+- regeneracao de project files
+- build
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_hard.ps1 -KillUnrealEditor -PurgeGlobalDDC
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_build_nuclear.ps1 -KillUnrealEditor
 ```
 
-Skip Zen hygiene only if needed:
+Metrica: tempo total de relogio da pipeline (script).
+
+### 0.4) Aliases de compatibilidade (ACP/legacy)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_normal.ps1 -SkipZenHygiene
+powershell -ExecutionPolicy Bypass -File .\Scripts\build_incremental.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_normal.ps1
+powershell -ExecutionPolicy Bypass -File .\Scripts\clean_rebuild_hard.ps1
 ```
 
-## 0.1) Run Zen hygiene only
+Mapeamento:
+
+- `build_incremental` -> `omni_build_dev`
+- `clean_rebuild_normal` -> `omni_build_carimbo`
+- `clean_rebuild_hard` -> `omni_build_nuclear`
+
+### 0.5) Gate de conformidade (B0 map-conformance)
+
+Uso: antes de avancar para runtime, para bloquear regressao de encapsulamento de maps.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1
+```
+
+Cobertura:
+
+- acesso direto em `Settings`, `Payload`, `Arguments`, `Output` (`.`, `->`, `Add`, `Find`, `Contains`, indexer `[]`)
+- getters por referencia para esses maps (`GetSettings/GetPayload/GetArguments/GetOutput`)
+- campos `TMap` em secao publica de headers `Public/**` (com whitelist explicita)
+
+## 0.6) Zen hygiene isolado
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Scripts\zen_hygiene.ps1
 ```
 
-Optional:
+Opcional:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Scripts\zen_hygiene.ps1 -KillUnrealEditor

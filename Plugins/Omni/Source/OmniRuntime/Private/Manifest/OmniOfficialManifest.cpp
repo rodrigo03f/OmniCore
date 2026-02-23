@@ -27,7 +27,7 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.SystemClass = UOmniActionGateSystem::StaticClass();
 		Entry.bEnabled = true;
 		Entry.Dependencies = { TEXT("Status") };
-		Entry.Settings.Add(TEXT("ActionProfileClassPath"), TEXT("/Script/OmniRuntime.OmniDevActionProfile"));
+		Entry.SetSetting(TEXT("ActionProfileClassPath"), TEXT("/Script/OmniRuntime.OmniDevActionProfile"));
 	}
 
 	{
