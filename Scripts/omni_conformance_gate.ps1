@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = "",
     [string[]]$SourceRoots = @("Plugins/Omni/Source"),
+    [string]$ManifestCppRelativePath = "Plugins/Omni/Source/OmniRuntime/Private/Manifest/OmniOfficialManifest.cpp",
     [string[]]$AllowedDirectMapAccessFileSuffixes = @(
         "Plugins/Omni/Source/OmniCore/Private/Manifest/OmniManifest.cpp",
         "Plugins/Omni/Source/OmniCore/Public/Systems/OmniSystemMessaging.h",
@@ -8,7 +9,8 @@ param(
     ),
     [string[]]$AllowedPublicTMapExposureFileSuffixes = @(
         "Plugins/Omni/Source/OmniCore/Public/Systems/OmniSystemMessaging.h"
-    )
+    ),
+    [switch]$RequireContentAssets
 )
 
 Set-StrictMode -Version Latest
@@ -58,9 +60,23 @@ function Is-AllowedPath {
 
 $projectRoot = Resolve-ProjectRoot -InputRoot $ProjectRoot
 Write-Host "Conformance gate root: $projectRoot" -ForegroundColor Green
+$isCiRun = (($env:CI -eq "true") -or ($env:GITHUB_ACTIONS -eq "true"))
 
 $protectedMapNames = @("Settings", "Payload", "Arguments", "Output")
 $mapMutationOrLookupOps = @("Add", "Find", "Contains")
+$expectedManifestProfileAssetPaths = @(
+    "/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default",
+    "/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default",
+    "/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default"
+)
+$expectedContentAssets = @(
+    "Content/Data/Action/DA_Omni_ActionLibrary_Default.uasset",
+    "Content/Data/Action/DA_Omni_ActionProfile_Default.uasset",
+    "Content/Data/Status/DA_Omni_StatusLibrary_Default.uasset",
+    "Content/Data/Status/DA_Omni_StatusProfile_Default.uasset",
+    "Content/Data/Movement/DA_Omni_MovementLibrary_Default.uasset",
+    "Content/Data/Movement/DA_Omni_MovementProfile_Default.uasset"
+)
 
 $files = @()
 foreach ($sourceRoot in $SourceRoots) {
@@ -170,6 +186,23 @@ function Get-PublicTMapFieldViolations {
     return $result
 }
 
+function Add-Violation {
+    param(
+        [ref]$Target,
+        [string]$File,
+        [int]$Line,
+        [string]$Rule,
+        [string]$Text
+    )
+
+    $Target.Value += [PSCustomObject]@{
+        File = $File
+        Line = $Line
+        Rule = $Rule
+        Text = $Text
+    }
+}
+
 $violations = @()
 foreach ($file in $files) {
     $relativePath = To-NormalizedRelativePath -RootPath $projectRoot -FilePath $file.FullName
@@ -209,13 +242,56 @@ foreach ($file in $files) {
     }
 }
 
+$manifestCppPath = Join-Path $projectRoot $ManifestCppRelativePath
+if (-not (Test-Path $manifestCppPath)) {
+    Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-file-missing" -Text "OmniOfficialManifest.cpp not found."
+}
+else {
+    $manifestContent = Get-Content -Raw -Path $manifestCppPath
+    foreach ($expectedPath in $expectedManifestProfileAssetPaths) {
+        if ($manifestContent -notmatch [regex]::Escape($expectedPath)) {
+            Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-profile-path-missing" -Text "Expected profile asset path not found: $expectedPath"
+        }
+    }
+}
+
+$shouldCheckContentAssets = $RequireContentAssets -or (-not $isCiRun)
+if ($shouldCheckContentAssets) {
+    foreach ($relativeAssetPath in $expectedContentAssets) {
+        $absoluteAssetPath = Join-Path $projectRoot $relativeAssetPath
+        if (-not (Test-Path $absoluteAssetPath)) {
+            Add-Violation -Target ([ref]$violations) -File $relativeAssetPath -Line 0 -Rule "expected-content-asset-missing" -Text "Expected asset file is missing."
+        }
+    }
+}
+else {
+    Write-Host "Content asset presence check skipped (CI mode)." -ForegroundColor DarkYellow
+}
+
+$runtimeSystemFiles = Get-ChildItem -Path (Join-Path $projectRoot "Plugins/Omni/Source/OmniRuntime/Private/Systems") -Recurse -File -Include *.cpp -ErrorAction SilentlyContinue
+foreach ($runtimeFile in $runtimeSystemFiles) {
+    $runtimeRelativePath = To-NormalizedRelativePath -RootPath $projectRoot -FilePath $runtimeFile.FullName
+    $allLines = Get-Content -Path $runtimeFile.FullName
+    for ($index = 0; $index -lt $allLines.Count; $index++) {
+        $line = $allLines[$index]
+        if ($line -match "BuildDevFallback[A-Za-z0-9_]*\s*\(\s*\)\s*;") {
+            $from = [Math]::Max(0, $index - 8)
+            $to = [Math]::Min($allLines.Count - 1, $index)
+            $window = ($allLines[$from..$to] -join "`n")
+            if ($window -notmatch "bDevDefaultsEnabled|IsDevDefaultsEnabled|omni\.devdefaults") {
+                Add-Violation -Target ([ref]$violations) -File $runtimeRelativePath -Line ($index + 1) -Rule "fallback-call-not-guarded" -Text $line.Trim()
+            }
+        }
+    }
+}
+
 if ($violations.Count -gt 0) {
-    Write-Host "Conformance gate FAILED. B0 map-conformance violations were found." -ForegroundColor Red
+    Write-Host "Conformance gate FAILED. B1/B0 conformance violations were found." -ForegroundColor Red
     foreach ($violation in $violations) {
         Write-Host (" - {0}:{1} [{2}] {3}" -f $violation.File, $violation.Line, $violation.Rule, $violation.Text) -ForegroundColor Red
     }
     exit 1
 }
 
-Write-Host "Conformance gate PASSED. No B0 map-conformance violations found." -ForegroundColor Green
+Write-Host "Conformance gate PASSED. No B1/B0 conformance violations found." -ForegroundColor Green
 exit 0

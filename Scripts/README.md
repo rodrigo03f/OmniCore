@@ -138,9 +138,9 @@ Mapeamento:
 - `clean_rebuild_normal` -> `omni_build_carimbo`
 - `clean_rebuild_hard` -> `omni_build_nuclear`
 
-### 0.5) Gate de conformidade (B0 map-conformance)
+### 0.5) Gate de conformidade (B1/B0)
 
-Uso: antes de avancar para runtime, para bloquear regressao de encapsulamento de maps.
+Uso: antes de merge para bloquear regressao de contrato e setup data-driven.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1
@@ -151,8 +151,40 @@ Cobertura:
 - acesso direto em `Settings`, `Payload`, `Arguments`, `Output` (`.`, `->`, `Add`, `Find`, `Contains`, indexer `[]`)
 - getters por referencia para esses maps (`GetSettings/GetPayload/GetArguments/GetOutput`)
 - campos `TMap` em secao publica de headers `Public/**` (com whitelist explicita)
+- `OmniOfficialManifest.cpp` precisa apontar para os 3 profile asset paths canonicos
+- checagem de existencia dos 6 assets canonicos em `Content/Data/**` (local por padrao)
+- heuristica para detectar chamada de fallback sem guarda de `omni.devdefaults`
 
-## 0.6) Zen hygiene isolado
+Notas CI:
+
+- em CI a checagem de arquivos `.uasset` eh ignorada por padrao (para nao quebrar pipeline sem content checkout completo)
+- para forcar checagem de assets no ambiente atual:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1 -RequireContentAssets
+```
+
+### 0.6) DEV defaults (opt-in)
+
+Padrão: OFF (`fail-fast` quando profile/library de manifest estao ausentes/quebrados).
+
+Ativar via CVar:
+
+```powershell
+omni.devdefaults 1
+```
+
+Ativar via config:
+
+`[/Script/OmniRuntime.OmniSystemRegistrySubsystem]`
+
+- `bAllowDevDefaults=True`
+
+Com DEV defaults ON, o runtime pode usar fallback, mas sinaliza no overlay:
+
+- `Omni.DevDefaults=ON`
+
+## 0.7) Zen hygiene isolado
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Scripts\zen_hygiene.ps1
