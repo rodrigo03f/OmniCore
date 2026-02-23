@@ -47,7 +47,8 @@ public:
 	FOmniActionGateDecision GetLastDecision() const;
 
 private:
-	void BuildDefaultDefinitionsIfNeeded();
+	bool TryLoadDefinitionsFromManifest(const UOmniManifest* Manifest);
+	void BuildDevFallbackDefinitionsIfNeeded();
 	void RebuildDefinitionMap();
 	FGameplayTagContainer BuildCurrentBlockingContext() const;
 	bool EvaluateStartAction(FName ActionId, FOmniActionGateDecision& OutDecision, bool bApplyChanges);

@@ -326,7 +326,18 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 		return false;
 	}
 
-	return InitializeFromManifest(ClassManifest);
+	const bool bInitialized = InitializeFromManifest(ClassManifest);
+	if (bInitialized)
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("Registry initialized via DEV_FALLBACK manifest class: %s"),
+			*AutoManifestClassPath.ToString()
+		);
+	}
+
+	return bInitialized;
 }
 
 bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
@@ -335,6 +346,8 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 	{
 		return false;
 	}
+
+	UE_LOG(LogOmniRegistry, Warning, TEXT("Using DEV_FALLBACK system class list from config."));
 
 	UOmniManifest* FallbackManifest = NewObject<UOmniManifest>(this, NAME_None, RF_Transient);
 	FallbackManifest->Namespace = TEXT("Omni.Fallback");
@@ -375,8 +388,8 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 	{
 		UE_LOG(
 			LogOmniRegistry,
-			Log,
-			TEXT("Registry inicializado via fallback (%d classes)."),
+			Warning,
+			TEXT("Registry initialized via DEV_FALLBACK system class list (%d classes)."),
 			FallbackManifest->Systems.Num()
 		);
 	}

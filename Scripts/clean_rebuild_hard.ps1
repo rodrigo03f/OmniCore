@@ -36,6 +36,7 @@ if (-not (Test-Path $normalScript)) {
 
 Write-Host "Project root: $projectRoot" -ForegroundColor Green
 Write-Host "Hard clean will remove additional cache folders." -ForegroundColor DarkYellow
+Write-Host "Warning: hard clean rebuild is for exceptional troubleshooting only." -ForegroundColor Yellow
 
 # Extra cleanup for hard mode
 Remove-DirIfExists -PathToRemove (Join-Path $projectRoot "DerivedDataCache")

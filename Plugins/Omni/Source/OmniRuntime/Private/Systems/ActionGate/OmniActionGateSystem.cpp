@@ -3,8 +3,10 @@
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
+#include "Profile/OmniActionProfile.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
+#include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniActionGateSystem, Log, All);
 
@@ -15,6 +17,8 @@ namespace OmniActionGate
 	static const FName SystemId(TEXT("ActionGate"));
 	static const FName QueryIsActionActive(TEXT("IsActionActive"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName ManifestSettingActionProfileAssetPath(TEXT("ActionProfileAssetPath"));
+	static const FName ManifestSettingActionProfileClassPath(TEXT("ActionProfileClassPath"));
 
 	static FString DecisionToResult(const FOmniActionGateDecision& Decision)
 	{
@@ -45,7 +49,11 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 		}
 	}
 
-	BuildDefaultDefinitionsIfNeeded();
+	DefaultDefinitions.Reset();
+	if (!TryLoadDefinitionsFromManifest(Manifest))
+	{
+		BuildDevFallbackDefinitionsIfNeeded();
+	}
 	RebuildDefinitionMap();
 	ActiveActions.Reset();
 	ActiveLockRefCounts.Reset();
@@ -256,18 +264,143 @@ FOmniActionGateDecision UOmniActionGateSystem::GetLastDecision() const
 	return LastDecision;
 }
 
-void UOmniActionGateSystem::BuildDefaultDefinitionsIfNeeded()
+bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(const UOmniManifest* Manifest)
+{
+	if (!Manifest)
+	{
+		return false;
+	}
+
+	const FName RuntimeSystemId = GetSystemId();
+	const FOmniSystemManifestEntry* SystemEntry = Manifest->FindEntryById(RuntimeSystemId);
+	if (!SystemEntry)
+	{
+		SystemEntry = Manifest->Systems.FindByPredicate(
+			[this](const FOmniSystemManifestEntry& Entry)
+			{
+				UClass* LoadedClass = Entry.SystemClass.LoadSynchronous();
+				return LoadedClass == GetClass();
+			}
+		);
+	}
+	if (!SystemEntry)
+	{
+		return false;
+	}
+
+	UOmniActionProfile* LoadedProfile = nullptr;
+
+	if (const FString* ProfileAssetPathValue = SystemEntry->Settings.Find(OmniActionGate::ManifestSettingActionProfileAssetPath))
+	{
+		const FSoftObjectPath ProfileAssetPath(*ProfileAssetPathValue);
+		if (!ProfileAssetPath.IsNull())
+		{
+			UObject* LoadedObject = ProfileAssetPath.TryLoad();
+			LoadedProfile = Cast<UOmniActionProfile>(LoadedObject);
+			if (!LoadedProfile)
+			{
+				UE_LOG(
+					LogOmniActionGateSystem,
+					Warning,
+					TEXT("ActionProfileAssetPath invalido para ActionGate: %s"),
+					*ProfileAssetPath.ToString()
+				);
+			}
+		}
+	}
+
+	if (!LoadedProfile)
+	{
+		if (const FString* ProfileClassPathValue = SystemEntry->Settings.Find(OmniActionGate::ManifestSettingActionProfileClassPath))
+		{
+			const FSoftClassPath ProfileClassPath(*ProfileClassPathValue);
+			if (!ProfileClassPath.IsNull())
+			{
+				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniActionProfile>();
+				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniActionProfile::StaticClass()))
+				{
+					UE_LOG(
+						LogOmniActionGateSystem,
+						Warning,
+						TEXT("ActionProfileClassPath invalido para ActionGate: %s"),
+						*ProfileClassPath.ToString()
+					);
+				}
+				else
+				{
+					LoadedProfile = NewObject<UOmniActionProfile>(this, LoadedClass, NAME_None, RF_Transient);
+				}
+			}
+		}
+	}
+
+	if (!LoadedProfile)
+	{
+		return false;
+	}
+
+	TArray<FOmniActionDefinition> LoadedDefinitions;
+	LoadedProfile->ResolveDefinitions(LoadedDefinitions);
+	if (LoadedDefinitions.Num() == 0)
+	{
+		UE_LOG(
+			LogOmniActionGateSystem,
+			Warning,
+			TEXT("Action profile sem definicoes utilizaveis: %s"),
+			*GetNameSafe(LoadedProfile)
+		);
+		return false;
+	}
+
+	DefaultDefinitions = MoveTemp(LoadedDefinitions);
+	if (LoadedProfile->GetClass()->IsChildOf(UOmniDevActionProfile::StaticClass()))
+	{
+		UE_LOG(
+			LogOmniActionGateSystem,
+			Warning,
+			TEXT("Action definitions loaded from DEV_FALLBACK profile class: %s"),
+			*LoadedProfile->GetClass()->GetPathName()
+		);
+	}
+	else
+	{
+		UE_LOG(
+			LogOmniActionGateSystem,
+			Log,
+			TEXT("Action definitions loaded from profile: %s (Definitions=%d)"),
+			*GetNameSafe(LoadedProfile),
+			DefaultDefinitions.Num()
+		);
+	}
+
+	return true;
+}
+
+void UOmniActionGateSystem::BuildDevFallbackDefinitionsIfNeeded()
 {
 	if (DefaultDefinitions.Num() > 0)
 	{
 		return;
 	}
 
-	UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK C++."));
+	UOmniDevActionProfile* DevProfile = NewObject<UOmniDevActionProfile>(this, NAME_None, RF_Transient);
+	if (DevProfile)
+	{
+		DevProfile->ResolveDefinitions(DefaultDefinitions);
+	}
+
+	if (DefaultDefinitions.Num() > 0)
+	{
+		UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK profile instance."));
+		return;
+	}
+
+	UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK inline C++."));
 
 	FOmniActionDefinition SprintAction;
 	SprintAction.ActionId = TEXT("Movement.Sprint");
 	SprintAction.Policy = EOmniActionPolicy::DenyIfActive;
+
 	const FGameplayTag ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
 	if (ExhaustedTag.IsValid())
 	{

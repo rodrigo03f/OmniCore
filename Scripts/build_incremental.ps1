@@ -1,10 +1,7 @@
 param(
     [string]$ProjectRoot = "",
     [switch]$SkipProjectFiles,
-    [switch]$SkipBuild,
-    [switch]$KillUnrealEditor,
-    [switch]$SkipZenHygiene,
-    [switch]$AllPlugins
+    [switch]$KillUnrealEditor
 )
 
 Set-StrictMode -Version Latest
@@ -51,14 +48,6 @@ function Resolve-EngineRoot {
     throw "Could not resolve engine root for EngineAssociation='$assoc'. Checked: $($candidates -join ', ')"
 }
 
-function Remove-DirIfExists {
-    param([string]$PathToRemove)
-    if (Test-Path $PathToRemove) {
-        Write-Host "Removing: $PathToRemove" -ForegroundColor DarkYellow
-        Remove-Item -Path $PathToRemove -Recurse -Force
-    }
-}
-
 function Invoke-External {
     param(
         [string]$Exe,
@@ -86,47 +75,13 @@ if (-not (Test-Path $buildBat)) {
 Write-Host "Project root: $projectRoot" -ForegroundColor Green
 Write-Host "UProject: $uprojectPath" -ForegroundColor Green
 Write-Host "Engine root: $engineRoot" -ForegroundColor Green
-Write-Host "Warning: clean rebuild should be used only when incremental build is insufficient." -ForegroundColor Yellow
-Write-Host "Tip: for day-to-day builds use Scripts\\build_incremental.ps1" -ForegroundColor Yellow
+Write-Host "Mode: incremental build (recommended daily path)" -ForegroundColor Green
 
 if ($KillUnrealEditor) {
     $editorProcesses = Get-Process -Name "UnrealEditor" -ErrorAction SilentlyContinue
     if ($editorProcesses) {
         Write-Host "Stopping UnrealEditor process(es)..." -ForegroundColor DarkYellow
         $editorProcesses | Stop-Process -Force
-    }
-}
-
-if (-not $SkipZenHygiene) {
-    $zenHygieneScript = Join-Path $PSScriptRoot "zen_hygiene.ps1"
-    if (Test-Path $zenHygieneScript) {
-        Write-Host "> powershell -ExecutionPolicy Bypass -File `"$zenHygieneScript`" -ProjectRoot `"$projectRoot`"" -ForegroundColor Cyan
-        powershell -ExecutionPolicy Bypass -File $zenHygieneScript -ProjectRoot $projectRoot
-        if ($LASTEXITCODE -ne 0) {
-            throw "Zen hygiene failed with exit code ${LASTEXITCODE}."
-        }
-    }
-    else {
-        Write-Host "Zen hygiene script not found; continuing without it." -ForegroundColor DarkYellow
-    }
-}
-
-# Clean project and plugin artifacts (fast clean)
-Remove-DirIfExists -PathToRemove (Join-Path $projectRoot "Binaries")
-Remove-DirIfExists -PathToRemove (Join-Path $projectRoot "Intermediate")
-
-$pluginsRoot = Join-Path $projectRoot "Plugins"
-if (Test-Path $pluginsRoot) {
-    if ($AllPlugins) {
-        $pluginDirs = Get-ChildItem -Path $pluginsRoot -Directory
-        foreach ($pluginDir in $pluginDirs) {
-            Remove-DirIfExists -PathToRemove (Join-Path $pluginDir.FullName "Binaries")
-            Remove-DirIfExists -PathToRemove (Join-Path $pluginDir.FullName "Intermediate")
-        }
-    }
-    else {
-        Remove-DirIfExists -PathToRemove (Join-Path $pluginsRoot "Omni\Binaries")
-        Remove-DirIfExists -PathToRemove (Join-Path $pluginsRoot "Omni\Intermediate")
     }
 }
 
@@ -149,16 +104,14 @@ if (-not $SkipProjectFiles) {
     }
 }
 
-if (-not $SkipBuild) {
-    $target = "$projectName" + "Editor"
-    Invoke-External -Exe $buildBat -ArgumentList @(
-        $target,
-        "Win64",
-        "Development",
-        "-Project=$uprojectPath",
-        "-WaitMutex",
-        "-FromMsBuild"
-    )
-}
+$target = "$projectName" + "Editor"
+Invoke-External -Exe $buildBat -ArgumentList @(
+    $target,
+    "Win64",
+    "Development",
+    "-Project=$uprojectPath",
+    "-WaitMutex",
+    "-FromMsBuild"
+)
 
-Write-Host "Normal clean rebuild completed." -ForegroundColor Green
+Write-Host "Incremental build completed." -ForegroundColor Green

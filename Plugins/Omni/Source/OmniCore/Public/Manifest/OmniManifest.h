@@ -23,6 +23,9 @@ struct OMNICORE_API FOmniSystemManifestEntry
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Manifest")
 	TArray<FName> Dependencies;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Manifest")
+	TMap<FName, FString> Settings;
 };
 
 UCLASS(BlueprintType)
@@ -42,4 +45,3 @@ public:
 
 	const FOmniSystemManifestEntry* FindEntryById(FName SystemId) const;
 };
-

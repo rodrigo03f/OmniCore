@@ -75,7 +75,21 @@ Codigos de saida:
 - `1` = ALERT
 - `2` = FAIL
 
-## 0) Clean rebuild (normal/hard)
+## 0) Build incremental (recomendado no dia a dia)
+
+Build rapido sem limpar caches/pastas:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\build_incremental.ps1 -KillUnrealEditor
+```
+
+Sem regenerar project files:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\build_incremental.ps1 -KillUnrealEditor -SkipProjectFiles
+```
+
+## 0.5) Clean rebuild (usar so quando necessario)
 
 Normal (fast clean + project files + build):
 
