@@ -21,6 +21,7 @@ public class OmniForge : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new[]
 			{
+				"Json",
 				"UnrealEd",
 				"AssetTools",
 				"Projects",
