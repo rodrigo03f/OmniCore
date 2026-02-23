@@ -21,6 +21,9 @@ public:
 	virtual void ShutdownSystem_Implementation() override;
 	virtual bool IsTickEnabled_Implementation() const override;
 	virtual void TickSystem_Implementation(float DeltaTime) override;
+	virtual bool HandleCommand_Implementation(const FOmniCommandMessage& Command) override;
+	virtual bool HandleQuery_Implementation(FOmniQueryMessage& Query) override;
+	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
 
 	UFUNCTION(BlueprintPure, Category = "Omni|Status")
 	float GetCurrentStamina() const;

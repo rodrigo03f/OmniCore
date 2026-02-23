@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Tickable.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Systems/OmniSystemMessaging.h"
 #include "UObject/SoftObjectPath.h"
 #include "OmniSystemRegistrySubsystem.generated.h"
 
@@ -40,6 +41,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Omni|Registry")
 	UOmniManifest* GetActiveManifest() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|Registry|Messaging")
+	bool DispatchCommand(const FOmniCommandMessage& Command);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|Registry|Messaging")
+	bool ExecuteQuery(UPARAM(ref) FOmniQueryMessage& Query);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|Registry|Messaging")
+	void BroadcastEvent(const FOmniEventMessage& Event);
 
 private:
 	struct FResolvedSystemSpec

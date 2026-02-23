@@ -11,6 +11,28 @@ namespace OmniStatus
 {
 	static const FName CategoryName(TEXT("Status"));
 	static const FName SourceName(TEXT("StatusSystem"));
+	static const FName SystemId(TEXT("Status"));
+	static const FName CommandSetSprinting(TEXT("SetSprinting"));
+	static const FName CommandConsumeStamina(TEXT("ConsumeStamina"));
+	static const FName CommandAddStamina(TEXT("AddStamina"));
+	static const FName QueryIsExhausted(TEXT("IsExhausted"));
+	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
+	static const FName QueryGetStamina(TEXT("GetStamina"));
+
+	static bool TryParseBool(const FString& Value, bool& OutValue)
+	{
+		if (Value.Equals(TEXT("True"), ESearchCase::IgnoreCase) || Value == TEXT("1"))
+		{
+			OutValue = true;
+			return true;
+		}
+		if (Value.Equals(TEXT("False"), ESearchCase::IgnoreCase) || Value == TEXT("0"))
+		{
+			OutValue = false;
+			return true;
+		}
+		return false;
+	}
 }
 
 FName UOmniStatusSystem::GetSystemId_Implementation() const
@@ -106,6 +128,15 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 		bExhausted = true;
 		UpdateStateTags();
 
+		if (Registry.IsValid())
+		{
+			FOmniEventMessage Event;
+			Event.SourceSystem = OmniStatus::SystemId;
+			Event.EventName = TEXT("Exhausted");
+			Event.Payload.Add(TEXT("State"), TEXT("True"));
+			Registry->BroadcastEvent(Event);
+		}
+
 		if (DebugSubsystem.IsValid())
 		{
 			DebugSubsystem->LogWarning(OmniStatus::CategoryName, TEXT("Entrou em estado Exhausted"), OmniStatus::SourceName);
@@ -116,6 +147,15 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 		bExhausted = false;
 		UpdateStateTags();
 
+		if (Registry.IsValid())
+		{
+			FOmniEventMessage Event;
+			Event.SourceSystem = OmniStatus::SystemId;
+			Event.EventName = TEXT("ExhaustedCleared");
+			Event.Payload.Add(TEXT("State"), TEXT("False"));
+			Registry->BroadcastEvent(Event);
+		}
+
 		if (DebugSubsystem.IsValid())
 		{
 			DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Saiu de estado Exhausted"), OmniStatus::SourceName);
@@ -123,6 +163,99 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 	}
 
 	PublishTelemetry();
+}
+
+bool UOmniStatusSystem::HandleCommand_Implementation(const FOmniCommandMessage& Command)
+{
+	if (Command.CommandName == OmniStatus::CommandSetSprinting)
+	{
+		const FString* SprintingValue = Command.Arguments.Find(TEXT("bSprinting"));
+		bool bNewSprinting = false;
+		if (!SprintingValue || !OmniStatus::TryParseBool(*SprintingValue, bNewSprinting))
+		{
+			return false;
+		}
+
+		SetSprinting(bNewSprinting);
+		return true;
+	}
+
+	if (Command.CommandName == OmniStatus::CommandConsumeStamina)
+	{
+		const FString* AmountValue = Command.Arguments.Find(TEXT("Amount"));
+		if (!AmountValue)
+		{
+			return false;
+		}
+
+		float Amount = 0.0f;
+		LexFromString(Amount, *(*AmountValue));
+		ConsumeStamina(Amount);
+		return true;
+	}
+
+	if (Command.CommandName == OmniStatus::CommandAddStamina)
+	{
+		const FString* AmountValue = Command.Arguments.Find(TEXT("Amount"));
+		if (!AmountValue)
+		{
+			return false;
+		}
+
+		float Amount = 0.0f;
+		LexFromString(Amount, *(*AmountValue));
+		AddStamina(Amount);
+		return true;
+	}
+
+	return Super::HandleCommand_Implementation(Command);
+}
+
+bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
+{
+	if (Query.QueryName == OmniStatus::QueryIsExhausted)
+	{
+		Query.bHandled = true;
+		Query.bSuccess = true;
+		Query.Result = bExhausted ? TEXT("True") : TEXT("False");
+		return true;
+	}
+
+	if (Query.QueryName == OmniStatus::QueryGetStateTagsCsv)
+	{
+		TArray<FString> Tags;
+		for (const FGameplayTag& Tag : StateTags)
+		{
+			if (Tag.IsValid())
+			{
+				Tags.Add(Tag.ToString());
+			}
+		}
+
+		Query.bHandled = true;
+		Query.bSuccess = true;
+		Query.Result = FString::Join(Tags, TEXT(","));
+		return true;
+	}
+
+	if (Query.QueryName == OmniStatus::QueryGetStamina)
+	{
+		Query.bHandled = true;
+		Query.bSuccess = true;
+		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, MaxStaminaValue);
+		Query.Output.Add(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
+		Query.Output.Add(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStaminaValue));
+		Query.Output.Add(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
+		return true;
+	}
+
+	return Super::HandleQuery_Implementation(Query);
+}
+
+void UOmniStatusSystem::HandleEvent_Implementation(const FOmniEventMessage& Event)
+{
+	Super::HandleEvent_Implementation(Event);
+	(void)Event;
 }
 
 float UOmniStatusSystem::GetCurrentStamina() const

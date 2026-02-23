@@ -2,10 +2,8 @@
 
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
-#include "GameplayTagContainer.h"
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
-#include "Systems/Status/OmniStatusSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniActionGateSystem, Log, All);
 
@@ -13,6 +11,18 @@ namespace OmniActionGate
 {
 	static const FName CategoryName(TEXT("ActionGate"));
 	static const FName SourceName(TEXT("ActionGateSystem"));
+	static const FName SystemId(TEXT("ActionGate"));
+	static const FName CommandStartAction(TEXT("StartAction"));
+	static const FName CommandStopAction(TEXT("StopAction"));
+	static const FName QueryCanStartAction(TEXT("CanStartAction"));
+	static const FName QueryIsActionActive(TEXT("IsActionActive"));
+	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
+	static const FName StatusSystemId(TEXT("Status"));
+
+	static FString DecisionToResult(const FOmniActionGateDecision& Decision)
+	{
+		return FString::Printf(TEXT("%s | %s"), Decision.bAllowed ? TEXT("ALLOW") : TEXT("DENY"), *Decision.Reason);
+	}
 }
 
 FName UOmniActionGateSystem::GetSystemId_Implementation() const
@@ -22,7 +32,7 @@ FName UOmniActionGateSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniActionGateSystem::GetDependencies_Implementation() const
 {
-	return { TEXT("Status") };
+	return { OmniActionGate::StatusSystemId };
 }
 
 void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
@@ -93,90 +103,91 @@ bool UOmniActionGateSystem::IsTickEnabled_Implementation() const
 	return false;
 }
 
-bool UOmniActionGateSystem::TryStartAction(const FName ActionId, FOmniActionGateDecision& OutDecision)
+bool UOmniActionGateSystem::HandleCommand_Implementation(const FOmniCommandMessage& Command)
 {
-	FOmniActionGateDecision Decision;
-	Decision.ActionId = ActionId;
-
-	if (!bInitialized || ActionId == NAME_None)
+	if (Command.CommandName == OmniActionGate::CommandStartAction)
 	{
-		Decision.bAllowed = false;
-		Decision.Reason = TEXT("Sistema nao inicializado ou ActionId invalido.");
-		PublishDecision(Decision, true);
-		OutDecision = Decision;
-		return false;
-	}
-
-	const FOmniActionDefinition* Definition = DefinitionsById.Find(ActionId);
-	if (!Definition || !Definition->bEnabled)
-	{
-		Decision.bAllowed = false;
-		Decision.Reason = TEXT("Acao desconhecida ou desabilitada.");
-		PublishDecision(Decision, true);
-		OutDecision = Decision;
-		return false;
-	}
-
-	Decision.Policy = Definition->Policy;
-
-	const bool bAlreadyActive = ActiveActions.Contains(ActionId);
-	if (bAlreadyActive)
-	{
-		if (Definition->Policy == EOmniActionPolicy::DenyIfActive)
+		FName ActionId = NAME_None;
+		if (!TryParseActionId(Command.Arguments, ActionId))
 		{
-			Decision.bAllowed = false;
-			Decision.Reason = TEXT("Acao ja ativa (policy deny).");
-			PublishDecision(Decision, true);
-			OutDecision = Decision;
 			return false;
 		}
 
-		if (Definition->Policy == EOmniActionPolicy::SucceedIfActive)
+		FOmniActionGateDecision Decision;
+		return TryStartAction(ActionId, Decision);
+	}
+
+	if (Command.CommandName == OmniActionGate::CommandStopAction)
+	{
+		FName ActionId = NAME_None;
+		if (!TryParseActionId(Command.Arguments, ActionId))
 		{
-			Decision.bAllowed = true;
-			Decision.Reason = TEXT("Acao ja ativa (policy succeed).");
-			PublishDecision(Decision, false);
-			OutDecision = Decision;
+			return false;
+		}
+
+		const FString* Reason = Command.Arguments.Find(TEXT("Reason"));
+		return StopAction(ActionId, Reason ? FName(**Reason) : NAME_None);
+	}
+
+	return Super::HandleCommand_Implementation(Command);
+}
+
+bool UOmniActionGateSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
+{
+	if (Query.QueryName == OmniActionGate::QueryCanStartAction)
+	{
+		FName ActionId = NAME_None;
+		if (!TryParseActionId(Query.Arguments, ActionId))
+		{
+			Query.bHandled = true;
+			Query.bSuccess = false;
+			Query.Result = TEXT("Missing ActionId");
 			return true;
 		}
 
-		if (Definition->Policy == EOmniActionPolicy::RestartIfActive)
-		{
-			StopAction(ActionId, TEXT("RestartPolicy"));
-		}
+		FOmniActionGateDecision Decision;
+		const bool bAllowed = EvaluateStartAction(ActionId, Decision, false);
+		Query.bHandled = true;
+		Query.bSuccess = bAllowed;
+		Query.Result = OmniActionGate::DecisionToResult(Decision);
+		Query.Output.Add(TEXT("Reason"), Decision.Reason);
+		Query.Output.Add(TEXT("ActionId"), ActionId.ToString());
+		Query.Output.Add(TEXT("Policy"), StaticEnum<EOmniActionPolicy>()->GetNameStringByValue(static_cast<int64>(Decision.Policy)));
+		return true;
 	}
 
-	const FGameplayTagContainer BlockingContext = BuildCurrentBlockingContext();
-	if (Definition->BlockedBy.HasAny(BlockingContext))
+	if (Query.QueryName == OmniActionGate::QueryIsActionActive)
 	{
-		Decision.bAllowed = false;
-		Decision.Reason = FString::Printf(TEXT("Bloqueada por tags: %s"), *Definition->BlockedBy.ToStringSimple());
-		PublishDecision(Decision, true);
-		OutDecision = Decision;
-		return false;
-	}
-
-	for (const FName ActionToCancel : Definition->Cancels)
-	{
-		if (ActionToCancel == NAME_None || !ActiveActions.Contains(ActionToCancel))
+		FName ActionId = NAME_None;
+		if (!TryParseActionId(Query.Arguments, ActionId))
 		{
-			continue;
+			Query.bHandled = true;
+			Query.bSuccess = false;
+			Query.Result = TEXT("Missing ActionId");
+			return true;
 		}
 
-		if (StopAction(ActionToCancel, ActionId))
-		{
-			Decision.CanceledActions.Add(ActionToCancel);
-		}
+		const bool bActive = ActiveActions.Contains(ActionId);
+		Query.bHandled = true;
+		Query.bSuccess = true;
+		Query.Result = bActive ? TEXT("True") : TEXT("False");
+		return true;
 	}
 
-	ActiveActions.Add(ActionId);
-	AddActionLocks(*Definition);
+	return Super::HandleQuery_Implementation(Query);
+}
 
-	Decision.bAllowed = true;
-	Decision.Reason = TEXT("Autorizada.");
-	PublishDecision(Decision, true);
-	OutDecision = Decision;
-	return true;
+void UOmniActionGateSystem::HandleEvent_Implementation(const FOmniEventMessage& Event)
+{
+	Super::HandleEvent_Implementation(Event);
+	(void)Event;
+}
+
+bool UOmniActionGateSystem::TryStartAction(const FName ActionId, FOmniActionGateDecision& OutDecision)
+{
+	const bool bAllowed = EvaluateStartAction(ActionId, OutDecision, true);
+	PublishDecision(OutDecision, true);
+	return bAllowed;
 }
 
 bool UOmniActionGateSystem::StopAction(const FName ActionId, const FName Reason)
@@ -256,6 +267,8 @@ void UOmniActionGateSystem::BuildDefaultDefinitionsIfNeeded()
 		return;
 	}
 
+	UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK C++."));
+
 	FOmniActionDefinition SprintAction;
 	SprintAction.ActionId = TEXT("Movement.Sprint");
 	SprintAction.Policy = EOmniActionPolicy::DenyIfActive;
@@ -303,23 +316,134 @@ FGameplayTagContainer UOmniActionGateSystem::BuildCurrentBlockingContext() const
 {
 	FGameplayTagContainer Context;
 
-	if (UOmniStatusSystem* StatusSystem = ResolveStatusSystem())
+	if (Registry.IsValid())
 	{
-		Context.AppendTags(StatusSystem->GetStateTags());
+		FOmniQueryMessage Query;
+		Query.SourceSystem = OmniActionGate::SystemId;
+		Query.TargetSystem = OmniActionGate::StatusSystemId;
+		Query.QueryName = OmniActionGate::QueryGetStateTagsCsv;
+
+		if (Registry->ExecuteQuery(Query) && Query.bSuccess && !Query.Result.IsEmpty())
+		{
+			TArray<FString> TagStrings;
+			Query.Result.ParseIntoArray(TagStrings, TEXT(","), true);
+			for (FString TagString : TagStrings)
+			{
+				TagString.TrimStartAndEndInline();
+				const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagString), false);
+				if (Tag.IsValid())
+				{
+					Context.AddTag(Tag);
+				}
+			}
+		}
 	}
 
 	Context.AppendTags(GetActiveLocks());
 	return Context;
 }
 
-UOmniStatusSystem* UOmniActionGateSystem::ResolveStatusSystem() const
+bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActionGateDecision& OutDecision, const bool bApplyChanges)
 {
-	if (!Registry.IsValid())
+	FOmniActionGateDecision Decision;
+	Decision.ActionId = ActionId;
+
+	if (!bInitialized || ActionId == NAME_None)
 	{
-		return nullptr;
+		Decision.bAllowed = false;
+		Decision.Reason = TEXT("Sistema nao inicializado ou ActionId invalido.");
+		OutDecision = Decision;
+		return false;
 	}
 
-	return Cast<UOmniStatusSystem>(Registry->GetSystemById(TEXT("Status")));
+	const FOmniActionDefinition* Definition = DefinitionsById.Find(ActionId);
+	if (!Definition || !Definition->bEnabled)
+	{
+		Decision.bAllowed = false;
+		Decision.Reason = TEXT("Acao desconhecida ou desabilitada.");
+		OutDecision = Decision;
+		return false;
+	}
+
+	Decision.Policy = Definition->Policy;
+
+	const bool bAlreadyActive = ActiveActions.Contains(ActionId);
+	if (bAlreadyActive)
+	{
+		if (Definition->Policy == EOmniActionPolicy::DenyIfActive)
+		{
+			Decision.bAllowed = false;
+			Decision.Reason = TEXT("Acao ja ativa (policy deny).");
+			OutDecision = Decision;
+			return false;
+		}
+
+		if (Definition->Policy == EOmniActionPolicy::SucceedIfActive)
+		{
+			Decision.bAllowed = true;
+			Decision.Reason = TEXT("Acao ja ativa (policy succeed).");
+			OutDecision = Decision;
+			return true;
+		}
+
+		if (Definition->Policy == EOmniActionPolicy::RestartIfActive)
+		{
+			if (bApplyChanges)
+			{
+				StopAction(ActionId, TEXT("RestartPolicy"));
+			}
+			Decision.Reason = TEXT("Acao reiniciada (policy restart).");
+		}
+	}
+
+	const FGameplayTagContainer BlockingContext = BuildCurrentBlockingContext();
+	if (Definition->BlockedBy.HasAny(BlockingContext))
+	{
+		Decision.bAllowed = false;
+		Decision.Reason = FString::Printf(TEXT("Bloqueada por tags: %s"), *Definition->BlockedBy.ToStringSimple());
+		OutDecision = Decision;
+		return false;
+	}
+
+	if (bApplyChanges)
+	{
+		for (const FName ActionToCancel : Definition->Cancels)
+		{
+			if (ActionToCancel == NAME_None || !ActiveActions.Contains(ActionToCancel))
+			{
+				continue;
+			}
+
+			if (StopAction(ActionToCancel, ActionId))
+			{
+				Decision.CanceledActions.Add(ActionToCancel);
+			}
+		}
+
+		ActiveActions.Add(ActionId);
+		AddActionLocks(*Definition);
+	}
+
+	Decision.bAllowed = true;
+	if (Decision.Reason.IsEmpty())
+	{
+		Decision.Reason = TEXT("Autorizada.");
+	}
+
+	OutDecision = Decision;
+	return true;
+}
+
+bool UOmniActionGateSystem::TryParseActionId(const TMap<FName, FString>& Arguments, FName& OutActionId)
+{
+	const FString* ActionValue = Arguments.Find(TEXT("ActionId"));
+	if (!ActionValue || ActionValue->IsEmpty())
+	{
+		return false;
+	}
+
+	OutActionId = FName(**ActionValue);
+	return OutActionId != NAME_None;
 }
 
 void UOmniActionGateSystem::AddActionLocks(const FOmniActionDefinition& Definition)
@@ -381,12 +505,17 @@ void UOmniActionGateSystem::PublishDecision(const FOmniActionGateDecision& Decis
 		return;
 	}
 
-	const FString DecisionValue = FString::Printf(
-		TEXT("%s | %s"),
-		Decision.bAllowed ? TEXT("ALLOW") : TEXT("DENY"),
-		*Decision.Reason
-	);
-	DebugSubsystem->SetMetric(TEXT("ActionGate.LastDecision"), DecisionValue);
+	DebugSubsystem->SetMetric(TEXT("ActionGate.LastDecision"), OmniActionGate::DecisionToResult(Decision));
+
+	if (Registry.IsValid())
+	{
+		FOmniEventMessage Event;
+		Event.SourceSystem = OmniActionGate::SystemId;
+		Event.EventName = Decision.bAllowed ? TEXT("ActionAllowed") : TEXT("ActionDenied");
+		Event.Payload.Add(TEXT("ActionId"), Decision.ActionId.ToString());
+		Event.Payload.Add(TEXT("Reason"), Decision.Reason);
+		Registry->BroadcastEvent(Event);
+	}
 
 	if (!bEmitLogEntry)
 	{

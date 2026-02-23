@@ -7,7 +7,6 @@
 #include "OmniActionGateSystem.generated.h"
 
 class UOmniManifest;
-class UOmniStatusSystem;
 class UOmniSystemRegistrySubsystem;
 class UOmniDebugSubsystem;
 
@@ -22,6 +21,9 @@ public:
 	virtual void InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest) override;
 	virtual void ShutdownSystem_Implementation() override;
 	virtual bool IsTickEnabled_Implementation() const override;
+	virtual bool HandleCommand_Implementation(const FOmniCommandMessage& Command) override;
+	virtual bool HandleQuery_Implementation(FOmniQueryMessage& Query) override;
+	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
 	bool TryStartAction(FName ActionId, FOmniActionGateDecision& OutDecision);
@@ -48,7 +50,8 @@ private:
 	void BuildDefaultDefinitionsIfNeeded();
 	void RebuildDefinitionMap();
 	FGameplayTagContainer BuildCurrentBlockingContext() const;
-	UOmniStatusSystem* ResolveStatusSystem() const;
+	bool EvaluateStartAction(FName ActionId, FOmniActionGateDecision& OutDecision, bool bApplyChanges);
+	static bool TryParseActionId(const TMap<FName, FString>& Arguments, FName& OutActionId);
 	void AddActionLocks(const FOmniActionDefinition& Definition);
 	void RemoveActionLocks(const FOmniActionDefinition& Definition);
 	void PublishTelemetry();

@@ -6,9 +6,8 @@
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Manifest/OmniManifest.h"
-#include "Systems/ActionGate/OmniActionGateSystem.h"
+#include "Systems/OmniClockSubsystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
-#include "Systems/Status/OmniStatusSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniMovementSystem, Log, All);
 
@@ -16,6 +15,29 @@ namespace OmniMovement
 {
 	static const FName CategoryName(TEXT("Movement"));
 	static const FName SourceName(TEXT("MovementSystem"));
+	static const FName SystemId(TEXT("Movement"));
+	static const FName ActionGateSystemId(TEXT("ActionGate"));
+	static const FName StatusSystemId(TEXT("Status"));
+	static const FName QueryCanStartAction(TEXT("CanStartAction"));
+	static const FName QueryIsExhausted(TEXT("IsExhausted"));
+	static const FName CommandStartAction(TEXT("StartAction"));
+	static const FName CommandStopAction(TEXT("StopAction"));
+	static const FName CommandSetSprinting(TEXT("SetSprinting"));
+
+	static bool TryParseBoolString(const FString& Value, bool& OutValue)
+	{
+		if (Value.Equals(TEXT("True"), ESearchCase::IgnoreCase) || Value == TEXT("1"))
+		{
+			OutValue = true;
+			return true;
+		}
+		if (Value.Equals(TEXT("False"), ESearchCase::IgnoreCase) || Value == TEXT("0"))
+		{
+			OutValue = false;
+			return true;
+		}
+		return false;
+	}
 }
 
 FName UOmniMovementSystem::GetSystemId_Implementation() const
@@ -25,7 +47,7 @@ FName UOmniMovementSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniMovementSystem::GetDependencies_Implementation() const
 {
-	return { TEXT("ActionGate"), TEXT("Status") };
+	return { OmniMovement::ActionGateSystemId, OmniMovement::StatusSystemId };
 }
 
 void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
@@ -38,10 +60,9 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 		if (UGameInstance* GameInstance = Registry->GetGameInstance())
 		{
 			DebugSubsystem = GameInstance->GetSubsystem<UOmniDebugSubsystem>();
+			ClockSubsystem = GameInstance->GetSubsystem<UOmniClockSubsystem>();
 		}
 	}
-
-	TryResolveDependencies();
 
 	bSprintRequested = false;
 	bIsSprinting = false;
@@ -65,8 +86,7 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 	}
 
 	DebugSubsystem.Reset();
-	ActionGateSystem.Reset();
-	StatusSystem.Reset();
+	ClockSubsystem.Reset();
 	Registry.Reset();
 
 	UE_LOG(LogOmniMovementSystem, Log, TEXT("Movement system shutdown."));
@@ -79,15 +99,14 @@ bool UOmniMovementSystem::IsTickEnabled_Implementation() const
 
 void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 {
-	if (!TryResolveDependencies())
+	if (!Registry.IsValid())
 	{
 		return;
 	}
 
-	const UWorld* World = Registry.IsValid() ? Registry->GetWorld() : nullptr;
-	const float WorldTime = World ? World->GetTimeSeconds() : 0.0f;
+	const double WorldTime = GetNowSeconds();
 
-	if (bUseKeyboardShiftAsSprintRequest && Registry.IsValid())
+	if (bUseKeyboardShiftAsSprintRequest)
 	{
 		if (UGameInstance* GameInstance = Registry->GetGameInstance())
 		{
@@ -125,12 +144,25 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		StopSprinting(TEXT("Released"));
 	}
 
-	if (bIsSprinting && StatusSystem.IsValid() && StatusSystem->IsExhausted())
+	if (bIsSprinting && QueryStatusIsExhausted())
 	{
 		StopSprinting(TEXT("Exhausted"));
 	}
 
 	PublishTelemetry();
+}
+
+void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Event)
+{
+	Super::HandleEvent_Implementation(Event);
+
+	if (Event.SourceSystem == OmniMovement::StatusSystemId && Event.EventName == TEXT("Exhausted"))
+	{
+		if (bIsSprinting)
+		{
+			StopSprinting(TEXT("ExhaustedEvent"));
+		}
+	}
 }
 
 void UOmniMovementSystem::SetSprintRequested(const bool bRequested)
@@ -178,49 +210,24 @@ float UOmniMovementSystem::GetAutoSprintRemainingSeconds() const
 	return AutoSprintRemainingSeconds;
 }
 
-bool UOmniMovementSystem::TryResolveDependencies()
-{
-	if (!Registry.IsValid())
-	{
-		return false;
-	}
-
-	if (!ActionGateSystem.IsValid())
-	{
-		ActionGateSystem = Cast<UOmniActionGateSystem>(Registry->GetSystemById(TEXT("ActionGate")));
-	}
-
-	if (!StatusSystem.IsValid())
-	{
-		StatusSystem = Cast<UOmniStatusSystem>(Registry->GetSystemById(TEXT("Status")));
-	}
-
-	return ActionGateSystem.IsValid() && StatusSystem.IsValid();
-}
-
 void UOmniMovementSystem::StartSprinting()
 {
-	if (!ActionGateSystem.IsValid())
+	FString DenyReason;
+	if (!QueryCanStartSprint(&DenyReason))
 	{
+		NextStartAttemptWorldTime = GetNowSeconds() + FailedRetryIntervalSeconds;
 		return;
 	}
 
-	FOmniActionGateDecision Decision;
-	if (!ActionGateSystem->TryStartAction(SprintActionId, Decision))
+	if (!DispatchStartSprint())
 	{
-		NextStartAttemptWorldTime = Registry.IsValid() && Registry->GetWorld()
-			? Registry->GetWorld()->GetTimeSeconds() + FailedRetryIntervalSeconds
-			: FailedRetryIntervalSeconds;
+		NextStartAttemptWorldTime = GetNowSeconds() + FailedRetryIntervalSeconds;
 		return;
 	}
 
 	bIsSprinting = true;
 	NextStartAttemptWorldTime = 0.0f;
-
-	if (StatusSystem.IsValid())
-	{
-		StatusSystem->SetSprinting(true);
-	}
+	DispatchStatusSprinting(true);
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -232,24 +239,13 @@ void UOmniMovementSystem::StopSprinting(const FName Reason)
 {
 	if (!bIsSprinting)
 	{
-		if (StatusSystem.IsValid())
-		{
-			StatusSystem->SetSprinting(false);
-		}
+		DispatchStatusSprinting(false);
 		return;
 	}
 
-	if (ActionGateSystem.IsValid())
-	{
-		ActionGateSystem->StopAction(SprintActionId, Reason);
-	}
-
+	DispatchStopSprint(Reason);
 	bIsSprinting = false;
-
-	if (StatusSystem.IsValid())
-	{
-		StatusSystem->SetSprinting(false);
-	}
+	DispatchStatusSprinting(false);
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -272,4 +268,120 @@ void UOmniMovementSystem::PublishTelemetry() const
 	DebugSubsystem->SetMetric(TEXT("Movement.SprintRequested"), bSprintRequested ? TEXT("True") : TEXT("False"));
 	DebugSubsystem->SetMetric(TEXT("Movement.IsSprinting"), bIsSprinting ? TEXT("True") : TEXT("False"));
 	DebugSubsystem->SetMetric(TEXT("Movement.AutoSprintRemaining"), FString::Printf(TEXT("%.1fs"), AutoSprintRemainingSeconds));
+}
+
+double UOmniMovementSystem::GetNowSeconds() const
+{
+	if (ClockSubsystem.IsValid())
+	{
+		return ClockSubsystem->GetSimTime();
+	}
+	if (Registry.IsValid() && Registry->GetWorld())
+	{
+		return Registry->GetWorld()->GetTimeSeconds();
+	}
+	return 0.0;
+}
+
+bool UOmniMovementSystem::QueryStatusIsExhausted() const
+{
+	if (!Registry.IsValid())
+	{
+		return false;
+	}
+
+	FOmniQueryMessage Query;
+	Query.SourceSystem = OmniMovement::SystemId;
+	Query.TargetSystem = OmniMovement::StatusSystemId;
+	Query.QueryName = OmniMovement::QueryIsExhausted;
+
+	if (!Registry->ExecuteQuery(Query) || !Query.bSuccess)
+	{
+		return false;
+	}
+
+	bool bExhausted = false;
+	if (!OmniMovement::TryParseBoolString(Query.Result, bExhausted))
+	{
+		return false;
+	}
+
+	return bExhausted;
+}
+
+void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const
+{
+	if (!Registry.IsValid())
+	{
+		return;
+	}
+
+	FOmniCommandMessage Command;
+	Command.SourceSystem = OmniMovement::SystemId;
+	Command.TargetSystem = OmniMovement::StatusSystemId;
+	Command.CommandName = OmniMovement::CommandSetSprinting;
+	Command.Arguments.Add(TEXT("bSprinting"), bSprinting ? TEXT("True") : TEXT("False"));
+	Registry->DispatchCommand(Command);
+}
+
+bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
+{
+	if (!Registry.IsValid())
+	{
+		return false;
+	}
+
+	FOmniQueryMessage Query;
+	Query.SourceSystem = OmniMovement::SystemId;
+	Query.TargetSystem = OmniMovement::ActionGateSystemId;
+	Query.QueryName = OmniMovement::QueryCanStartAction;
+	Query.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
+
+	const bool bHandled = Registry->ExecuteQuery(Query);
+	if (!bHandled)
+	{
+		return false;
+	}
+
+	if (OutReason)
+	{
+		const FString* Reason = Query.Output.Find(TEXT("Reason"));
+		*OutReason = Reason ? *Reason : Query.Result;
+	}
+
+	return Query.bSuccess;
+}
+
+bool UOmniMovementSystem::DispatchStartSprint() const
+{
+	if (!Registry.IsValid())
+	{
+		return false;
+	}
+
+	FOmniCommandMessage Command;
+	Command.SourceSystem = OmniMovement::SystemId;
+	Command.TargetSystem = OmniMovement::ActionGateSystemId;
+	Command.CommandName = OmniMovement::CommandStartAction;
+	Command.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
+	return Registry->DispatchCommand(Command);
+}
+
+bool UOmniMovementSystem::DispatchStopSprint(const FName Reason) const
+{
+	if (!Registry.IsValid())
+	{
+		return false;
+	}
+
+	FOmniCommandMessage Command;
+	Command.SourceSystem = OmniMovement::SystemId;
+	Command.TargetSystem = OmniMovement::ActionGateSystemId;
+	Command.CommandName = OmniMovement::CommandStopAction;
+	Command.Arguments.Add(TEXT("ActionId"), SprintActionId.ToString());
+	if (Reason != NAME_None)
+	{
+		Command.Arguments.Add(TEXT("Reason"), Reason.ToString());
+	}
+	return Registry->DispatchCommand(Command);
 }

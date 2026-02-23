@@ -2,14 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Systems/OmniRuntimeSystem.h"
-#include "Systems/ActionGate/OmniActionGateTypes.h"
 #include "OmniMovementSystem.generated.h"
 
 class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
-class UOmniActionGateSystem;
-class UOmniStatusSystem;
+class UOmniClockSubsystem;
 
 UCLASS()
 class OMNIRUNTIME_API UOmniMovementSystem : public UOmniRuntimeSystem
@@ -23,6 +21,7 @@ public:
 	virtual void ShutdownSystem_Implementation() override;
 	virtual bool IsTickEnabled_Implementation() const override;
 	virtual void TickSystem_Implementation(float DeltaTime) override;
+	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Omni|Movement")
 	void SetSprintRequested(bool bRequested);
@@ -43,10 +42,15 @@ public:
 	float GetAutoSprintRemainingSeconds() const;
 
 private:
-	bool TryResolveDependencies();
 	void StartSprinting();
 	void StopSprinting(FName Reason);
 	void PublishTelemetry() const;
+	double GetNowSeconds() const;
+	bool QueryStatusIsExhausted() const;
+	void DispatchStatusSprinting(bool bSprinting) const;
+	bool QueryCanStartSprint(FString* OutReason = nullptr) const;
+	bool DispatchStartSprint() const;
+	bool DispatchStopSprint(FName Reason) const;
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|Movement")
@@ -74,10 +78,7 @@ private:
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;
 
 	UPROPERTY(Transient)
-	TWeakObjectPtr<UOmniActionGateSystem> ActionGateSystem;
-
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UOmniStatusSystem> StatusSystem;
+	TWeakObjectPtr<UOmniClockSubsystem> ClockSubsystem;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniDebugSubsystem> DebugSubsystem;

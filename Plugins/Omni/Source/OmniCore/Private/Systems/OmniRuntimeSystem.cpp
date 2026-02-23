@@ -35,3 +35,19 @@ void UOmniRuntimeSystem::TickSystem_Implementation(float DeltaTime)
 	(void)DeltaTime;
 }
 
+bool UOmniRuntimeSystem::HandleCommand_Implementation(const FOmniCommandMessage& Command)
+{
+	(void)Command;
+	return false;
+}
+
+bool UOmniRuntimeSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
+{
+	(void)Query;
+	return false;
+}
+
+void UOmniRuntimeSystem::HandleEvent_Implementation(const FOmniEventMessage& Event)
+{
+	(void)Event;
+}

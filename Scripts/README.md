@@ -152,3 +152,23 @@ Confirms whether recent logs contain expected debug overlay actions:
 - hidden
 - cleared
 - mode-related traces
+
+## 4) Commit + push rapido
+
+Comita tudo que mudou e faz push para o remoto atual:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\git_commit_push.ps1 -Message "feat: sprint A messaging"
+```
+
+Commit sem push:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\git_commit_push.ps1 -Message "wip: ajustes locais" -NoPush
+```
+
+Branch/remoto custom:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\git_commit_push.ps1 -Message "fix: logs registry" -Remote origin -Branch main
+```

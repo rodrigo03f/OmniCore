@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Systems/OmniSystemMessaging.h"
 #include "OmniRuntimeSystem.generated.h"
 
 class UOmniManifest;
@@ -30,6 +31,15 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "Omni|System")
 	void TickSystem(float DeltaTime);
 
+	UFUNCTION(BlueprintNativeEvent, Category = "Omni|System|Messaging")
+	bool HandleCommand(const FOmniCommandMessage& Command);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Omni|System|Messaging")
+	bool HandleQuery(UPARAM(ref) FOmniQueryMessage& Query);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Omni|System|Messaging")
+	void HandleEvent(const FOmniEventMessage& Event);
+
 protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|System")
 	FName SystemId = NAME_None;
@@ -37,4 +47,3 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|System")
 	TArray<FName> Dependencies;
 };
-

@@ -148,6 +148,92 @@ UOmniManifest* UOmniSystemRegistrySubsystem::GetActiveManifest() const
 	return ActiveManifest.Get();
 }
 
+bool UOmniSystemRegistrySubsystem::DispatchCommand(const FOmniCommandMessage& Command)
+{
+	if (!bRegistryInitialized || Command.TargetSystem == NAME_None)
+	{
+		return false;
+	}
+
+	UOmniRuntimeSystem* TargetSystem = GetSystemById(Command.TargetSystem);
+	if (!TargetSystem)
+	{
+		UE_LOG(LogOmniRegistry, Warning, TEXT("DispatchCommand: target system not found: %s"), *Command.TargetSystem.ToString());
+		return false;
+	}
+
+	UE_LOG(
+		LogOmniRegistry,
+		Verbose,
+		TEXT("DispatchCommand: Source=%s Target=%s Command=%s"),
+		*Command.SourceSystem.ToString(),
+		*Command.TargetSystem.ToString(),
+		*Command.CommandName.ToString()
+	);
+
+	return TargetSystem->HandleCommand(Command);
+}
+
+bool UOmniSystemRegistrySubsystem::ExecuteQuery(FOmniQueryMessage& Query)
+{
+	Query.bHandled = false;
+	Query.bSuccess = false;
+	Query.Result.Reset();
+	Query.Output.Reset();
+
+	if (!bRegistryInitialized || Query.TargetSystem == NAME_None)
+	{
+		return false;
+	}
+
+	UOmniRuntimeSystem* TargetSystem = GetSystemById(Query.TargetSystem);
+	if (!TargetSystem)
+	{
+		UE_LOG(LogOmniRegistry, Warning, TEXT("ExecuteQuery: target system not found: %s"), *Query.TargetSystem.ToString());
+		return false;
+	}
+
+	UE_LOG(
+		LogOmniRegistry,
+		Verbose,
+		TEXT("ExecuteQuery: Source=%s Target=%s Query=%s"),
+		*Query.SourceSystem.ToString(),
+		*Query.TargetSystem.ToString(),
+		*Query.QueryName.ToString()
+	);
+
+	const bool bHandled = TargetSystem->HandleQuery(Query);
+	Query.bHandled = Query.bHandled || bHandled;
+	return bHandled;
+}
+
+void UOmniSystemRegistrySubsystem::BroadcastEvent(const FOmniEventMessage& Event)
+{
+	if (!bRegistryInitialized)
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogOmniRegistry,
+		Verbose,
+		TEXT("BroadcastEvent: Source=%s Event=%s Target=ALL(%d)"),
+		*Event.SourceSystem.ToString(),
+		*Event.EventName.ToString(),
+		ActiveSystems.Num()
+	);
+
+	for (UOmniRuntimeSystem* System : ActiveSystems)
+	{
+		if (!System)
+		{
+			continue;
+		}
+
+		System->HandleEvent(Event);
+	}
+}
+
 bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 {
 	if (!AutoManifestAssetPath.IsNull())
