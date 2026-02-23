@@ -1,0 +1,35 @@
+name: Omni Conformance Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  omni-conformance-gate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Omni Conformance Gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $logPath = Join-Path $env:RUNNER_TEMP "omni_conformance_gate.log"
+
+          & powershell -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1 *>&1 | Tee-Object -FilePath $logPath
+          $exitCode = $LASTEXITCODE
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Conformance Gate"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```text"
+          Get-Content -Path $logPath | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
+
+          if ($exitCode -ne 0) {
+            exit $exitCode
+          }
