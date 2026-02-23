@@ -376,12 +376,24 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 	const bool bInitialized = InitializeFromManifest(ClassManifest);
 	if (bInitialized)
 	{
-		UE_LOG(
-			LogOmniRegistry,
-			Warning,
-			TEXT("Registry initialized via DEV_FALLBACK manifest class: %s"),
-			*AutoManifestClassPath.ToString()
-		);
+		if (IsDevDefaultsEnabled())
+		{
+			UE_LOG(
+				LogOmniRegistry,
+				Warning,
+				TEXT("DEV_DEFAULTS ACTIVE: Registry initialized with manifest class: %s"),
+				*AutoManifestClassPath.ToString()
+			);
+		}
+		else
+		{
+			UE_LOG(
+				LogOmniRegistry,
+				Verbose,
+				TEXT("Registry initialized via manifest class: %s"),
+				*AutoManifestClassPath.ToString()
+			);
+		}
 	}
 
 	return bInitialized;
