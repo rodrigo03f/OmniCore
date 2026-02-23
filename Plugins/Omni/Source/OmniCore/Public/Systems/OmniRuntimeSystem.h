@@ -40,10 +40,20 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "Omni|System|Messaging")
 	void HandleEvent(const FOmniEventMessage& Event);
 
+	UFUNCTION(BlueprintPure, Category = "Omni|System")
+	bool IsInitializationSuccessful() const;
+
+protected:
+	void SetInitializationResult(bool bSuccess);
+
 protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|System")
 	FName SystemId = NAME_None;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|System")
 	TArray<FName> Dependencies;
+
+private:
+	UPROPERTY(Transient)
+	bool bInitializationSuccessful = true;
 };

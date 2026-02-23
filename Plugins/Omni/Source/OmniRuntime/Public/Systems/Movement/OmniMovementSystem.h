@@ -43,8 +43,8 @@ public:
 	float GetAutoSprintRemainingSeconds() const;
 
 private:
-	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest);
-	void BuildDevFallbackSettings();
+	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, bool bAllowDevDefaults, FString& OutError);
+	bool BuildDevFallbackSettings();
 	void StartSprinting();
 	void StopSprinting(FName Reason);
 	void PublishTelemetry() const;

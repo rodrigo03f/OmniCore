@@ -2,6 +2,7 @@
 
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
+#include "Library/OmniStatusLibrary.h"
 #include "Manifest/OmniManifest.h"
 #include "Profile/OmniStatusProfile.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
@@ -23,6 +24,8 @@ namespace OmniStatus
 	static const FName QueryGetStamina(TEXT("GetStamina"));
 	static const FName ManifestSettingStatusProfileAssetPath(TEXT("StatusProfileAssetPath"));
 	static const FName ManifestSettingStatusProfileClassPath(TEXT("StatusProfileClassPath"));
+	static const TCHAR* DefaultStatusProfileAssetPath = TEXT("/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default");
+	static const FName DebugMetricProfileStatus(TEXT("Omni.Profile.Status"));
 }
 
 FName UOmniStatusSystem::GetSystemId_Implementation() const
@@ -38,6 +41,7 @@ TArray<FName> UOmniStatusSystem::GetDependencies_Implementation() const
 void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
 {
 	Super::InitializeSystem_Implementation(WorldContextObject, Manifest);
+	SetInitializationResult(false);
 
 	Registry = Cast<UOmniSystemRegistrySubsystem>(WorldContextObject);
 	if (Registry.IsValid())
@@ -47,11 +51,40 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 			DebugSubsystem = GameInstance->GetSubsystem<UOmniDebugSubsystem>();
 		}
 	}
+	if (DebugSubsystem.IsValid())
+	{
+		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Pending"));
+	}
 
 	RuntimeSettings = FOmniStatusSettings();
-	if (!TryLoadSettingsFromManifest(Manifest))
+	const bool bDevDefaultsEnabled = Registry.IsValid() && Registry->IsDevDefaultsEnabled();
+	FString LoadError;
+	if (!TryLoadSettingsFromManifest(Manifest, bDevDefaultsEnabled, LoadError))
 	{
-		BuildDevFallbackSettings();
+		if (!bDevDefaultsEnabled)
+		{
+			UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
+			if (DebugSubsystem.IsValid())
+			{
+				DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
+				DebugSubsystem->LogError(OmniStatus::CategoryName, LoadError, OmniStatus::SourceName);
+			}
+			return;
+		}
+
+		if (!BuildDevFallbackSettings())
+		{
+			const FString FallbackError = LoadError.IsEmpty()
+				? TEXT("DEV defaults enabled, but Status fallback failed to resolve settings.")
+				: FString::Printf(TEXT("%s | DEV defaults fallback also failed."), *LoadError);
+			UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *FallbackError);
+			if (DebugSubsystem.IsValid())
+			{
+				DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
+				DebugSubsystem->LogError(OmniStatus::CategoryName, FallbackError, OmniStatus::SourceName);
+			}
+			return;
+		}
 	}
 
 	ExhaustedTag = RuntimeSettings.ExhaustedTag;
@@ -66,6 +99,11 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 	TimeSinceLastConsumption = RuntimeSettings.RegenDelaySeconds;
 	UpdateStateTags();
 	PublishTelemetry();
+	SetInitializationResult(true);
+	if (DebugSubsystem.IsValid())
+	{
+		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Loaded"));
+	}
 
 	UE_LOG(LogOmniStatusSystem, Log, TEXT("Status system initialized. Manifest=%s"), *GetNameSafe(Manifest));
 
@@ -90,6 +128,7 @@ void UOmniStatusSystem::ShutdownSystem_Implementation()
 		DebugSubsystem->RemoveMetric(TEXT("Status.Stamina"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Exhausted"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Sprinting"));
+		DebugSubsystem->RemoveMetric(OmniStatus::DebugMetricProfileStatus);
 		DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Status finalizado"), OmniStatus::SourceName);
 	}
 
@@ -322,10 +361,17 @@ void UOmniStatusSystem::AddStamina(const float Amount)
 	CurrentStamina = FMath::Min(RuntimeSettings.MaxStamina, CurrentStamina + Amount);
 }
 
-bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifest)
+bool UOmniStatusSystem::TryLoadSettingsFromManifest(
+	const UOmniManifest* Manifest,
+	const bool bAllowDevDefaults,
+	FString& OutError
+)
 {
+	OutError.Reset();
+
 	if (!Manifest)
 	{
+		OutError = TEXT("Manifest is null.");
 		return false;
 	}
 
@@ -343,33 +389,71 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifes
 	}
 	if (!SystemEntry)
 	{
+		OutError = FString::Printf(
+			TEXT("SystemId '%s' not found in manifest '%s'."),
+			*RuntimeSystemId.ToString(),
+			*GetNameSafe(Manifest)
+		);
 		return false;
 	}
 
 	UOmniStatusProfile* LoadedProfile = nullptr;
+	bool bLoadedFromAssetPath = false;
 	bool bLoadedFromClassPath = false;
 
 	FString ProfileAssetPathValue;
-	if (SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileAssetPath, ProfileAssetPathValue))
+	if (!SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileAssetPath, ProfileAssetPathValue)
+		|| ProfileAssetPathValue.IsEmpty())
+	{
+		OutError = FString::Printf(
+			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Expected path: %s. Recommendation: create a UOmniStatusProfile asset at the expected path and assign a UOmniStatusLibrary."),
+			*OmniStatus::ManifestSettingStatusProfileAssetPath.ToString(),
+			*RuntimeSystemId.ToString(),
+			OmniStatus::DefaultStatusProfileAssetPath
+		);
+	}
+	else
 	{
 		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
-		if (!ProfileAssetPath.IsNull())
+		if (ProfileAssetPath.IsNull())
+		{
+			OutError = FString::Printf(
+				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniStatusProfile asset path (expected: %s)."),
+				*OmniStatus::ManifestSettingStatusProfileAssetPath.ToString(),
+				*RuntimeSystemId.ToString(),
+				*ProfileAssetPathValue,
+				OmniStatus::DefaultStatusProfileAssetPath
+			);
+		}
+		else
 		{
 			UObject* LoadedObject = ProfileAssetPath.TryLoad();
-			LoadedProfile = Cast<UOmniStatusProfile>(LoadedObject);
-			if (!LoadedProfile)
+			if (!LoadedObject)
 			{
-				UE_LOG(
-					LogOmniStatusSystem,
-					Warning,
-					TEXT("StatusProfileAssetPath invalido para Status: %s"),
+				OutError = FString::Printf(
+					TEXT("Status profile asset not found for SystemId '%s': %s. Recommendation: create a UOmniStatusProfile asset at this path and assign a UOmniStatusLibrary."),
+					*RuntimeSystemId.ToString(),
 					*ProfileAssetPath.ToString()
+				);
+			}
+			else if (UOmniStatusProfile* CastedProfile = Cast<UOmniStatusProfile>(LoadedObject))
+			{
+				LoadedProfile = CastedProfile;
+				bLoadedFromAssetPath = true;
+			}
+			else
+			{
+				OutError = FString::Printf(
+					TEXT("Asset type mismatch for SystemId '%s': %s is '%s' (expected UOmniStatusProfile)."),
+					*RuntimeSystemId.ToString(),
+					*ProfileAssetPath.ToString(),
+					*LoadedObject->GetClass()->GetPathName()
 				);
 			}
 		}
 	}
 
-	if (!LoadedProfile)
+	if (!LoadedProfile && bAllowDevDefaults)
 	{
 		FString ProfileClassPathValue;
 		if (SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileClassPath, ProfileClassPathValue))
@@ -380,12 +464,18 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifes
 				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniStatusProfile>();
 				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniStatusProfile::StaticClass()))
 				{
-					UE_LOG(
-						LogOmniStatusSystem,
-						Warning,
-						TEXT("StatusProfileClassPath invalido para Status: %s"),
-						*ProfileClassPath.ToString()
-					);
+					if (OutError.IsEmpty())
+					{
+						OutError = FString::Printf(
+							TEXT("Status profile class fallback invalid for SystemId '%s': %s."),
+							*RuntimeSystemId.ToString(),
+							*ProfileClassPath.ToString()
+						);
+					}
+					else
+					{
+						OutError += FString::Printf(TEXT(" Class fallback invalid: %s."), *ProfileClassPath.ToString());
+					}
 				}
 				else
 				{
@@ -398,17 +488,60 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifes
 
 	if (!LoadedProfile)
 	{
+		if (OutError.IsEmpty())
+		{
+			OutError = FString::Printf(
+				TEXT("Failed to resolve status profile for SystemId '%s'. Expected path: %s."),
+				*RuntimeSystemId.ToString(),
+				OmniStatus::DefaultStatusProfileAssetPath
+			);
+		}
 		return false;
+	}
+
+	if (bLoadedFromAssetPath)
+	{
+		const FSoftObjectPath StatusLibraryPath = LoadedProfile->StatusLibrary.ToSoftObjectPath();
+		if (StatusLibraryPath.IsNull())
+		{
+			OutError = FString::Printf(
+				TEXT("Profile '%s' for SystemId '%s' has null StatusLibrary. Recommendation: assign a UOmniStatusLibrary asset."),
+				*GetNameSafe(LoadedProfile),
+				*RuntimeSystemId.ToString()
+			);
+			return false;
+		}
+
+		UObject* LoadedLibraryObject = StatusLibraryPath.TryLoad();
+		if (!LoadedLibraryObject)
+		{
+			OutError = FString::Printf(
+				TEXT("StatusLibrary not found for SystemId '%s': %s. Recommendation: create a UOmniStatusLibrary asset and assign it in profile '%s'."),
+				*RuntimeSystemId.ToString(),
+				*StatusLibraryPath.ToString(),
+				*GetNameSafe(LoadedProfile)
+			);
+			return false;
+		}
+		if (!Cast<UOmniStatusLibrary>(LoadedLibraryObject))
+		{
+			OutError = FString::Printf(
+				TEXT("StatusLibrary type mismatch for SystemId '%s': %s is '%s' (expected UOmniStatusLibrary)."),
+				*RuntimeSystemId.ToString(),
+				*StatusLibraryPath.ToString(),
+				*LoadedLibraryObject->GetClass()->GetPathName()
+			);
+			return false;
+		}
 	}
 
 	FOmniStatusSettings LoadedSettings;
 	if (!LoadedProfile->ResolveSettings(LoadedSettings))
 	{
-		UE_LOG(
-			LogOmniStatusSystem,
-			Warning,
-			TEXT("Status profile sem configuracao utilizavel: %s"),
-			*GetNameSafe(LoadedProfile)
+		OutError = FString::Printf(
+			TEXT("Status profile '%s' has no usable configuration for SystemId '%s'. Recommendation: configure StatusLibrary and valid settings."),
+			*GetNameSafe(LoadedProfile),
+			*RuntimeSystemId.ToString()
 		);
 		return false;
 	}
@@ -416,10 +549,9 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifes
 	FString ValidationError;
 	if (!LoadedSettings.IsValid(ValidationError))
 	{
-		UE_LOG(
-			LogOmniStatusSystem,
-			Warning,
-			TEXT("Status settings invalidos no profile %s: %s"),
+		OutError = FString::Printf(
+			TEXT("Status settings invalid for SystemId '%s' in profile '%s': %s"),
+			*RuntimeSystemId.ToString(),
 			*GetNameSafe(LoadedProfile),
 			*ValidationError
 		);
@@ -446,11 +578,19 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifes
 		);
 	}
 
+	OutError.Reset();
 	return true;
 }
 
-void UOmniStatusSystem::BuildDevFallbackSettings()
+bool UOmniStatusSystem::BuildDevFallbackSettings()
 {
+	static bool bWarnedDevDefaultsThisSession = false;
+	if (!bWarnedDevDefaultsThisSession)
+	{
+		UE_LOG(LogOmniStatusSystem, Warning, TEXT("DEV_DEFAULTS ACTIVE: Status is using fallback settings."));
+		bWarnedDevDefaultsThisSession = true;
+	}
+
 	UOmniDevStatusProfile* DevProfile = NewObject<UOmniDevStatusProfile>(this, NAME_None, RF_Transient);
 	if (DevProfile)
 	{
@@ -459,12 +599,13 @@ void UOmniStatusSystem::BuildDevFallbackSettings()
 		{
 			RuntimeSettings = MoveTemp(LoadedSettings);
 			UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK profile instance."));
-			return;
+			return true;
 		}
 	}
 
 	RuntimeSettings = FOmniStatusSettings();
 	UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK inline C++."));
+	return true;
 }
 
 void UOmniStatusSystem::UpdateStateTags()

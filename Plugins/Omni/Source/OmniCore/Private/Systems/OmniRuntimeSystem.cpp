@@ -19,6 +19,7 @@ void UOmniRuntimeSystem::InitializeSystem_Implementation(UObject* WorldContextOb
 {
 	(void)WorldContextObject;
 	(void)Manifest;
+	bInitializationSuccessful = true;
 }
 
 void UOmniRuntimeSystem::ShutdownSystem_Implementation()
@@ -50,4 +51,14 @@ bool UOmniRuntimeSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 void UOmniRuntimeSystem::HandleEvent_Implementation(const FOmniEventMessage& Event)
 {
 	(void)Event;
+}
+
+bool UOmniRuntimeSystem::IsInitializationSuccessful() const
+{
+	return bInitializationSuccessful;
+}
+
+void UOmniRuntimeSystem::SetInitializationResult(const bool bSuccess)
+{
+	bInitializationSuccessful = bSuccess;
 }

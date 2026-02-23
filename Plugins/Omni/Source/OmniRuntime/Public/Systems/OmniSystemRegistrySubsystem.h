@@ -9,6 +9,7 @@
 
 class UOmniManifest;
 class UOmniRuntimeSystem;
+class UOmniDebugSubsystem;
 
 UCLASS(Config = Game)
 class OMNIRUNTIME_API UOmniSystemRegistrySubsystem : public UGameInstanceSubsystem, public FTickableGameObject
@@ -51,6 +52,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Omni|Registry|Messaging")
 	void BroadcastEvent(const FOmniEventMessage& Event);
 
+	UFUNCTION(BlueprintPure, Category = "Omni|Registry")
+	bool IsDevDefaultsEnabled() const;
+
 private:
 	struct FResolvedSystemSpec
 	{
@@ -67,6 +71,8 @@ private:
 		TArray<FName>& OutInitializationOrder
 	) const;
 	void ShutdownSystemsInternal(bool bLogSummary);
+	UOmniDebugSubsystem* TryGetDebugSubsystem() const;
+	void PublishRegistryDiagnostics(bool bManifestLoaded) const;
 
 private:
 	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry")
@@ -77,6 +83,9 @@ private:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry")
 	bool bUseConfiguredFallbackSystems = true;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry|Dev")
+	bool bAllowDevDefaults = false;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry")
 	TArray<FSoftClassPath> FallbackSystemClasses;

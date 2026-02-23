@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Library/OmniMovementLibrary.h"
 #include "Manifest/OmniManifest.h"
 #include "Profile/OmniMovementProfile.h"
 #include "Systems/OmniClockSubsystem.h"
@@ -23,6 +24,8 @@ namespace OmniMovement
 	static const FName StatusSystemId(TEXT("Status"));
 	static const FName ManifestSettingMovementProfileAssetPath(TEXT("MovementProfileAssetPath"));
 	static const FName ManifestSettingMovementProfileClassPath(TEXT("MovementProfileClassPath"));
+	static const TCHAR* DefaultMovementProfileAssetPath = TEXT("/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default");
+	static const FName DebugMetricProfileMovement(TEXT("Omni.Profile.Movement"));
 }
 
 FName UOmniMovementSystem::GetSystemId_Implementation() const
@@ -38,6 +41,7 @@ TArray<FName> UOmniMovementSystem::GetDependencies_Implementation() const
 void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
 {
 	Super::InitializeSystem_Implementation(WorldContextObject, Manifest);
+	SetInitializationResult(false);
 
 	Registry = Cast<UOmniSystemRegistrySubsystem>(WorldContextObject);
 	if (Registry.IsValid())
@@ -48,11 +52,40 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 			ClockSubsystem = GameInstance->GetSubsystem<UOmniClockSubsystem>();
 		}
 	}
+	if (DebugSubsystem.IsValid())
+	{
+		DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Pending"));
+	}
 
 	RuntimeSettings = FOmniMovementSettings();
-	if (!TryLoadSettingsFromManifest(Manifest))
+	const bool bDevDefaultsEnabled = Registry.IsValid() && Registry->IsDevDefaultsEnabled();
+	FString LoadError;
+	if (!TryLoadSettingsFromManifest(Manifest, bDevDefaultsEnabled, LoadError))
 	{
-		BuildDevFallbackSettings();
+		if (!bDevDefaultsEnabled)
+		{
+			UE_LOG(LogOmniMovementSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
+			if (DebugSubsystem.IsValid())
+			{
+				DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
+				DebugSubsystem->LogError(OmniMovement::CategoryName, LoadError, OmniMovement::SourceName);
+			}
+			return;
+		}
+
+		if (!BuildDevFallbackSettings())
+		{
+			const FString FallbackError = LoadError.IsEmpty()
+				? TEXT("DEV defaults enabled, but Movement fallback failed to resolve settings.")
+				: FString::Printf(TEXT("%s | DEV defaults fallback also failed."), *LoadError);
+			UE_LOG(LogOmniMovementSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *FallbackError);
+			if (DebugSubsystem.IsValid())
+			{
+				DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
+				DebugSubsystem->LogError(OmniMovement::CategoryName, FallbackError, OmniMovement::SourceName);
+			}
+			return;
+		}
 	}
 
 	bSprintRequested = false;
@@ -60,6 +93,11 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 	NextStartAttemptWorldTime = 0.0f;
 	AutoSprintRemainingSeconds = 0.0f;
 	PublishTelemetry();
+	SetInitializationResult(true);
+	if (DebugSubsystem.IsValid())
+	{
+		DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Loaded"));
+	}
 
 	UE_LOG(LogOmniMovementSystem, Log, TEXT("Movement system initialized. Manifest=%s"), *GetNameSafe(Manifest));
 }
@@ -73,6 +111,7 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 		DebugSubsystem->RemoveMetric(TEXT("Movement.SprintRequested"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.IsSprinting"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.AutoSprintRemaining"));
+		DebugSubsystem->RemoveMetric(OmniMovement::DebugMetricProfileMovement);
 		DebugSubsystem->LogEvent(OmniMovement::CategoryName, TEXT("Movement finalizado"), OmniMovement::SourceName);
 	}
 
@@ -261,10 +300,17 @@ void UOmniMovementSystem::PublishTelemetry() const
 	DebugSubsystem->SetMetric(TEXT("Movement.AutoSprintRemaining"), FString::Printf(TEXT("%.1fs"), AutoSprintRemainingSeconds));
 }
 
-bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manifest)
+bool UOmniMovementSystem::TryLoadSettingsFromManifest(
+	const UOmniManifest* Manifest,
+	const bool bAllowDevDefaults,
+	FString& OutError
+)
 {
+	OutError.Reset();
+
 	if (!Manifest)
 	{
+		OutError = TEXT("Manifest is null.");
 		return false;
 	}
 
@@ -282,33 +328,71 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manif
 	}
 	if (!SystemEntry)
 	{
+		OutError = FString::Printf(
+			TEXT("SystemId '%s' not found in manifest '%s'."),
+			*RuntimeSystemId.ToString(),
+			*GetNameSafe(Manifest)
+		);
 		return false;
 	}
 
 	UOmniMovementProfile* LoadedProfile = nullptr;
+	bool bLoadedFromAssetPath = false;
 	bool bLoadedFromClassPath = false;
 
 	FString ProfileAssetPathValue;
-	if (SystemEntry->TryGetSetting(OmniMovement::ManifestSettingMovementProfileAssetPath, ProfileAssetPathValue))
+	if (!SystemEntry->TryGetSetting(OmniMovement::ManifestSettingMovementProfileAssetPath, ProfileAssetPathValue)
+		|| ProfileAssetPathValue.IsEmpty())
+	{
+		OutError = FString::Printf(
+			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Expected path: %s. Recommendation: create a UOmniMovementProfile asset at the expected path and assign a UOmniMovementLibrary."),
+			*OmniMovement::ManifestSettingMovementProfileAssetPath.ToString(),
+			*RuntimeSystemId.ToString(),
+			OmniMovement::DefaultMovementProfileAssetPath
+		);
+	}
+	else
 	{
 		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
-		if (!ProfileAssetPath.IsNull())
+		if (ProfileAssetPath.IsNull())
+		{
+			OutError = FString::Printf(
+				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniMovementProfile asset path (expected: %s)."),
+				*OmniMovement::ManifestSettingMovementProfileAssetPath.ToString(),
+				*RuntimeSystemId.ToString(),
+				*ProfileAssetPathValue,
+				OmniMovement::DefaultMovementProfileAssetPath
+			);
+		}
+		else
 		{
 			UObject* LoadedObject = ProfileAssetPath.TryLoad();
-			LoadedProfile = Cast<UOmniMovementProfile>(LoadedObject);
-			if (!LoadedProfile)
+			if (!LoadedObject)
 			{
-				UE_LOG(
-					LogOmniMovementSystem,
-					Warning,
-					TEXT("MovementProfileAssetPath invalido para Movement: %s"),
+				OutError = FString::Printf(
+					TEXT("Movement profile asset not found for SystemId '%s': %s. Recommendation: create a UOmniMovementProfile asset at this path and assign a UOmniMovementLibrary."),
+					*RuntimeSystemId.ToString(),
 					*ProfileAssetPath.ToString()
+				);
+			}
+			else if (UOmniMovementProfile* CastedProfile = Cast<UOmniMovementProfile>(LoadedObject))
+			{
+				LoadedProfile = CastedProfile;
+				bLoadedFromAssetPath = true;
+			}
+			else
+			{
+				OutError = FString::Printf(
+					TEXT("Asset type mismatch for SystemId '%s': %s is '%s' (expected UOmniMovementProfile)."),
+					*RuntimeSystemId.ToString(),
+					*ProfileAssetPath.ToString(),
+					*LoadedObject->GetClass()->GetPathName()
 				);
 			}
 		}
 	}
 
-	if (!LoadedProfile)
+	if (!LoadedProfile && bAllowDevDefaults)
 	{
 		FString ProfileClassPathValue;
 		if (SystemEntry->TryGetSetting(OmniMovement::ManifestSettingMovementProfileClassPath, ProfileClassPathValue))
@@ -319,12 +403,18 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manif
 				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniMovementProfile>();
 				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniMovementProfile::StaticClass()))
 				{
-					UE_LOG(
-						LogOmniMovementSystem,
-						Warning,
-						TEXT("MovementProfileClassPath invalido para Movement: %s"),
-						*ProfileClassPath.ToString()
-					);
+					if (OutError.IsEmpty())
+					{
+						OutError = FString::Printf(
+							TEXT("Movement profile class fallback invalid for SystemId '%s': %s."),
+							*RuntimeSystemId.ToString(),
+							*ProfileClassPath.ToString()
+						);
+					}
+					else
+					{
+						OutError += FString::Printf(TEXT(" Class fallback invalid: %s."), *ProfileClassPath.ToString());
+					}
 				}
 				else
 				{
@@ -337,17 +427,60 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manif
 
 	if (!LoadedProfile)
 	{
+		if (OutError.IsEmpty())
+		{
+			OutError = FString::Printf(
+				TEXT("Failed to resolve movement profile for SystemId '%s'. Expected path: %s."),
+				*RuntimeSystemId.ToString(),
+				OmniMovement::DefaultMovementProfileAssetPath
+			);
+		}
 		return false;
+	}
+
+	if (bLoadedFromAssetPath)
+	{
+		const FSoftObjectPath MovementLibraryPath = LoadedProfile->MovementLibrary.ToSoftObjectPath();
+		if (MovementLibraryPath.IsNull())
+		{
+			OutError = FString::Printf(
+				TEXT("Profile '%s' for SystemId '%s' has null MovementLibrary. Recommendation: assign a UOmniMovementLibrary asset."),
+				*GetNameSafe(LoadedProfile),
+				*RuntimeSystemId.ToString()
+			);
+			return false;
+		}
+
+		UObject* LoadedLibraryObject = MovementLibraryPath.TryLoad();
+		if (!LoadedLibraryObject)
+		{
+			OutError = FString::Printf(
+				TEXT("MovementLibrary not found for SystemId '%s': %s. Recommendation: create a UOmniMovementLibrary asset and assign it in profile '%s'."),
+				*RuntimeSystemId.ToString(),
+				*MovementLibraryPath.ToString(),
+				*GetNameSafe(LoadedProfile)
+			);
+			return false;
+		}
+		if (!Cast<UOmniMovementLibrary>(LoadedLibraryObject))
+		{
+			OutError = FString::Printf(
+				TEXT("MovementLibrary type mismatch for SystemId '%s': %s is '%s' (expected UOmniMovementLibrary)."),
+				*RuntimeSystemId.ToString(),
+				*MovementLibraryPath.ToString(),
+				*LoadedLibraryObject->GetClass()->GetPathName()
+			);
+			return false;
+		}
 	}
 
 	FOmniMovementSettings LoadedSettings;
 	if (!LoadedProfile->ResolveSettings(LoadedSettings))
 	{
-		UE_LOG(
-			LogOmniMovementSystem,
-			Warning,
-			TEXT("Movement profile sem configuracao utilizavel: %s"),
-			*GetNameSafe(LoadedProfile)
+		OutError = FString::Printf(
+			TEXT("Movement profile '%s' has no usable configuration for SystemId '%s'. Recommendation: configure MovementLibrary and valid settings."),
+			*GetNameSafe(LoadedProfile),
+			*RuntimeSystemId.ToString()
 		);
 		return false;
 	}
@@ -355,10 +488,9 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manif
 	FString ValidationError;
 	if (!LoadedSettings.IsValid(ValidationError))
 	{
-		UE_LOG(
-			LogOmniMovementSystem,
-			Warning,
-			TEXT("Movement settings invalidos no profile %s: %s"),
+		OutError = FString::Printf(
+			TEXT("Movement settings invalid for SystemId '%s' in profile '%s': %s"),
+			*RuntimeSystemId.ToString(),
 			*GetNameSafe(LoadedProfile),
 			*ValidationError
 		);
@@ -385,11 +517,19 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(const UOmniManifest* Manif
 		);
 	}
 
+	OutError.Reset();
 	return true;
 }
 
-void UOmniMovementSystem::BuildDevFallbackSettings()
+bool UOmniMovementSystem::BuildDevFallbackSettings()
 {
+	static bool bWarnedDevDefaultsThisSession = false;
+	if (!bWarnedDevDefaultsThisSession)
+	{
+		UE_LOG(LogOmniMovementSystem, Warning, TEXT("DEV_DEFAULTS ACTIVE: Movement is using fallback settings."));
+		bWarnedDevDefaultsThisSession = true;
+	}
+
 	UOmniDevMovementProfile* DevProfile = NewObject<UOmniDevMovementProfile>(this, NAME_None, RF_Transient);
 	if (DevProfile)
 	{
@@ -398,12 +538,13 @@ void UOmniMovementSystem::BuildDevFallbackSettings()
 		{
 			RuntimeSettings = MoveTemp(LoadedSettings);
 			UE_LOG(LogOmniMovementSystem, Warning, TEXT("Movement settings loaded from DEV_FALLBACK profile instance."));
-			return;
+			return true;
 		}
 	}
 
 	RuntimeSettings = FOmniMovementSettings();
 	UE_LOG(LogOmniMovementSystem, Warning, TEXT("Movement settings loaded from DEV_FALLBACK inline C++."));
+	return true;
 }
 
 double UOmniMovementSystem::GetNowSeconds() const

@@ -50,8 +50,8 @@ public:
 	void AddStamina(float Amount);
 
 private:
-	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest);
-	void BuildDevFallbackSettings();
+	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, bool bAllowDevDefaults, FString& OutError);
+	bool BuildDevFallbackSettings();
 	void UpdateStateTags();
 	void PublishTelemetry();
 

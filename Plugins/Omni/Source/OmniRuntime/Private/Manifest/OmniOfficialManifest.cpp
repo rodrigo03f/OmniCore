@@ -21,7 +21,7 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.bEnabled = true;
 		Entry.SetSetting(
 			TEXT("StatusProfileAssetPath"),
-			TEXT("/Game/Omni/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default")
+			TEXT("/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default")
 		);
 	}
 
@@ -33,7 +33,7 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.Dependencies = { TEXT("Status") };
 		Entry.SetSetting(
 			TEXT("ActionProfileAssetPath"),
-			TEXT("/Game/Omni/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default")
+			TEXT("/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default")
 		);
 	}
 
@@ -45,7 +45,7 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 		Entry.Dependencies = { TEXT("ActionGate"), TEXT("Status") };
 		Entry.SetSetting(
 			TEXT("MovementProfileAssetPath"),
-			TEXT("/Game/Omni/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default")
+			TEXT("/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default")
 		);
 	}
 }

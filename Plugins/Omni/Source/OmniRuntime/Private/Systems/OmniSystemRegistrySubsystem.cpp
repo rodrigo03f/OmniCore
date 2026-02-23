@@ -1,14 +1,34 @@
 #include "Systems/OmniSystemRegistrySubsystem.h"
 
+#include "Debug/OmniDebugSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
+#include "HAL/IConsoleManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniRegistry, Log, All);
+
+namespace OmniRegistry
+{
+	static TAutoConsoleVariable<int32> CVarOmniDevDefaults(
+		TEXT("omni.devdefaults"),
+		0,
+		TEXT("Enable Omni DEV defaults fallback.\n0 = OFF (fail-fast)\n1 = ON (fallback allowed)"),
+		ECVF_Default
+	);
+}
 
 void UOmniSystemRegistrySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	PublishRegistryDiagnostics(false);
+	if (UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem())
+	{
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Action"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Status"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Movement"), TEXT("Pending"));
+	}
 
 	if (TryInitializeFromAutoManifest())
 	{
@@ -60,6 +80,13 @@ UWorld* UOmniSystemRegistrySubsystem::GetTickableGameObjectWorld() const
 bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifest)
 {
 	ShutdownSystemsInternal(false);
+	PublishRegistryDiagnostics(false);
+	if (UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem())
+	{
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Action"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Status"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Movement"), TEXT("Pending"));
+	}
 
 	if (!Manifest)
 	{
@@ -98,6 +125,19 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 		}
 
 		System->InitializeSystem(this, Manifest);
+		if (!System->IsInitializationSuccessful())
+		{
+			UE_LOG(
+				LogOmniRegistry,
+				Error,
+				TEXT("Fail-fast: system '%s' failed initialization and aborted registry startup."),
+				*SystemId.ToString()
+			);
+			ShutdownSystemsInternal(false);
+			PublishRegistryDiagnostics(false);
+			return false;
+		}
+
 		ActiveSystems.Add(System);
 		SystemsById.Add(SystemId, System);
 	}
@@ -113,6 +153,7 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 		*GetNameSafe(Manifest)
 	);
 
+	PublishRegistryDiagnostics(true);
 	return true;
 }
 
@@ -274,6 +315,12 @@ void UOmniSystemRegistrySubsystem::BroadcastEvent(const FOmniEventMessage& Event
 
 		System->HandleEvent(Event);
 	}
+}
+
+bool UOmniSystemRegistrySubsystem::IsDevDefaultsEnabled() const
+{
+	const int32 CVarValue = OmniRegistry::CVarOmniDevDefaults.GetValueOnGameThread();
+	return bAllowDevDefaults || CVarValue > 0;
 }
 
 bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
@@ -551,6 +598,28 @@ bool UOmniSystemRegistrySubsystem::BuildInitializationOrder(
 	return true;
 }
 
+UOmniDebugSubsystem* UOmniSystemRegistrySubsystem::TryGetDebugSubsystem() const
+{
+	if (const UGameInstance* GameInstance = GetGameInstance())
+	{
+		return GameInstance->GetSubsystem<UOmniDebugSubsystem>();
+	}
+
+	return nullptr;
+}
+
+void UOmniSystemRegistrySubsystem::PublishRegistryDiagnostics(const bool bManifestLoaded) const
+{
+	UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem();
+	if (!DebugSubsystem)
+	{
+		return;
+	}
+
+	DebugSubsystem->SetMetric(TEXT("Omni.ManifestLoaded"), bManifestLoaded ? TEXT("True") : TEXT("False"));
+	DebugSubsystem->SetMetric(TEXT("Omni.DevDefaults"), IsDevDefaultsEnabled() ? TEXT("ON") : TEXT("OFF"));
+}
+
 void UOmniSystemRegistrySubsystem::ShutdownSystemsInternal(const bool bLogSummary)
 {
 	if (ActiveSystems.Num() > 0)
@@ -573,4 +642,5 @@ void UOmniSystemRegistrySubsystem::ShutdownSystemsInternal(const bool bLogSummar
 	SystemsById.Reset();
 	ActiveManifest = nullptr;
 	bRegistryInitialized = false;
+	PublishRegistryDiagnostics(false);
 }
