@@ -26,11 +26,18 @@ struct FOmniForgeError
 	FString Recommendation;
 };
 
-struct FOmniForgeNormalizedSystem
+struct OMNIFORGE_API FOmniForgeNormalizedSystem
 {
 	FName SystemId = NAME_None;
 	FString SystemClassPath;
 	TArray<FName> Dependencies;
+
+	void SetSetting(FName Key, const FString& Value);
+	bool TryGetSetting(FName Key, FString& OutValue) const;
+	bool TryGetSettingPtr(FName Key, const FString*& OutPtr) const;
+	void GetSettingKeys(TArray<FName>& OutKeys) const;
+
+private:
 	TMap<FName, FString> Settings;
 };
 
