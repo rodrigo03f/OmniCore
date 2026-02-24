@@ -283,7 +283,7 @@ namespace OmniForge
 				{
 					continue;
 				}
-				System.Settings.Add(Key, NormalizeObjectPath(Value));
+				System.SetSetting(Key, NormalizeObjectPath(Value));
 			}
 		}
 
@@ -319,13 +319,14 @@ namespace OmniForge
 			Writer->WriteArrayEnd();
 
 			TArray<FName> SettingKeys;
-			System.Settings.GenerateKeyArray(SettingKeys);
+			System.GetSettingKeys(SettingKeys);
 			SettingKeys.Sort(FNameLexicalLess());
 
 			Writer->WriteObjectStart(TEXT("settings"));
 			for (const FName SettingKey : SettingKeys)
 			{
-				const FString* SettingValue = System.Settings.Find(SettingKey);
+				const FString* SettingValue = nullptr;
+				System.TryGetSettingPtr(SettingKey, SettingValue);
 				Writer->WriteValue(SettingKey.ToString(), SettingValue ? *SettingValue : FString());
 			}
 			Writer->WriteObjectEnd();
@@ -527,7 +528,8 @@ namespace OmniForge
 		OutProfile.SystemId = System.SystemId;
 		OutProfile.SettingKey = Rule.SettingKey;
 
-		const FString* RawPath = System.Settings.Find(Rule.SettingKey);
+		const FString* RawPath = nullptr;
+		System.TryGetSettingPtr(Rule.SettingKey, RawPath);
 		if (!RawPath || RawPath->IsEmpty())
 		{
 			Report.AddError(
