@@ -11,6 +11,7 @@
 #include "Manifest/OmniOfficialManifest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
 #include "Profile/OmniActionProfile.h"
 #include "Profile/OmniMovementProfile.h"
 #include "Profile/OmniStatusProfile.h"
@@ -360,18 +361,14 @@ namespace OmniForge
 			return false;
 		}
 
-		FSHA256Signature Signature;
-		const bool bOk = FPlatformMisc::GetSHA256Signature(
+		uint8 HashBytes[FSHA1::DigestSize];
+		FSHA1::HashBuffer(
 			reinterpret_cast<const uint8*>(Utf8Data.Get()),
 			static_cast<uint32>(Utf8Data.Length()),
-			Signature
+			HashBytes
 		);
-		if (!bOk)
-		{
-			return false;
-		}
 
-		OutHash = Signature.ToString();
+		OutHash = BytesToHex(HashBytes, UE_ARRAY_COUNT(HashBytes));
 		return !OutHash.IsEmpty();
 	}
 

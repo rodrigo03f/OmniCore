@@ -237,6 +237,20 @@ Confirms whether recent logs contain expected debug overlay actions:
 - cleared
 - mode-related traces
 
+## 3.1) Headless determinism check (Forge)
+
+Executa `omni.forge.run` duas vezes em `UnrealEditor-Cmd`, calcula SHA256 do artefato via PowerShell e compara.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1
+```
+
+Parametros uteis:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1 -ForgeExecCmd "omni.forge.run manifestClass=/Script/OmniRuntime.OmniOfficialManifest requireContentAssets=1 root=/Game/Data" -Artifact "Saved/Omni/ResolvedManifest.json"
+```
+
 ## 4) Commit + push rapido
 
 Comita tudo que mudou e faz push para o remoto atual:
