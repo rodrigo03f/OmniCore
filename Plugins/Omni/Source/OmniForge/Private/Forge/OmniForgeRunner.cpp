@@ -909,18 +909,13 @@ namespace OmniForge
 		return true;
 	}
 
-	static void ValidateAndResolve(
+	static bool Validate(
 		const FOmniForgeNormalized& Normalized,
-		const bool bRequireContentAssets,
 		TArray<FName>& OutInitializationOrder,
-		TArray<FOmniForgeResolvedProfile>& OutProfiles,
-		TArray<FOmniForgeResolvedAction>& OutActionDefinitions,
 		FOmniForgeReport& Report
 	)
 	{
 		OutInitializationOrder.Reset();
-		OutProfiles.Reset();
-		OutActionDefinitions.Reset();
 
 		if (Normalized.Systems.Num() == 0)
 		{
@@ -930,7 +925,7 @@ namespace OmniForge
 				TEXT("Manifest"),
 				TEXT("Add at least one enabled system entry to the manifest.")
 			);
-			return;
+			return false;
 		}
 
 		TMap<FName, const FOmniForgeNormalizedSystem*> SystemsById;
@@ -1026,6 +1021,20 @@ namespace OmniForge
 			);
 		}
 
+		return true;
+	}
+
+	static bool Resolve(
+		const FOmniForgeNormalized& Normalized,
+		const bool bRequireContentAssets,
+		TArray<FOmniForgeResolvedProfile>& OutProfiles,
+		TArray<FOmniForgeResolvedAction>& OutActionDefinitions,
+		FOmniForgeReport& Report
+	)
+	{
+		OutProfiles.Reset();
+		OutActionDefinitions.Reset();
+
 		for (const FOmniForgeNormalizedSystem& System : Normalized.Systems)
 		{
 			const FExpectedProfileRule Rule = GetExpectedProfileRule(System.SystemId);
@@ -1072,6 +1081,8 @@ namespace OmniForge
 				return FNameLexicalLess()(Left.ActionId, Right.ActionId);
 			}
 		);
+
+		return !Report.HasErrors();
 	}
 
 	static void BuildResolved(
@@ -1295,25 +1306,35 @@ static bool PhaseNormalize(FForgeContext& Context)
 	return !Context.Report.HasErrors();
 }
 
-static bool PhaseValidate(FForgeContext& Context)
+static bool Validate(FForgeContext& Context)
 {
-	if (!Context.Report.HasErrors())
+	Context.bCanResolveAfterValidate = false;
+	if (Context.Report.HasErrors())
 	{
-		OmniForge::ValidateAndResolve(
+		return true;
+	}
+
+	Context.bCanResolveAfterValidate = OmniForge::Validate(
+			Context.Normalized,
+			Context.InitializationOrder,
+			Context.Report
+		);
+	return Context.bCanResolveAfterValidate;
+}
+
+static bool Resolve(FForgeContext& Context)
+{
+	if (Context.bCanResolveAfterValidate)
+	{
+		OmniForge::Resolve(
 			Context.Normalized,
 			Context.EffectiveInput.bRequireContentAssets,
-			Context.InitializationOrder,
 			Context.Profiles,
 			Context.Actions,
 			Context.Report
 		);
 	}
 
-	return !Context.Report.HasErrors();
-}
-
-static bool PhaseResolve(FForgeContext& Context)
-{
 	if (!Context.Report.HasErrors())
 	{
 		OmniForge::BuildResolved(
@@ -1467,8 +1488,14 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 	Context.Report.ForgeVersion = OmniForge::ForgeVersion;
 
 	PhaseNormalize(Context);
-	PhaseValidate(Context);
-	PhaseResolve(Context);
+	if (!Validate(Context))
+	{
+		Resolve(Context);
+	}
+	else if (!Resolve(Context))
+	{
+		// Keep flow unchanged: Generate/Report still execute for failure output.
+	}
 	PhaseGenerate(Context);
 	PhaseReport(Context);
 

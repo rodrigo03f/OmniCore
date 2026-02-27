@@ -21,4 +21,5 @@ struct FForgeContext
 	FOmniForgeReport Report;
 	FString SavedOmniDir;
 	FString ResolvedManifestOutputFile;
+	bool bCanResolveAfterValidate = false;
 };
