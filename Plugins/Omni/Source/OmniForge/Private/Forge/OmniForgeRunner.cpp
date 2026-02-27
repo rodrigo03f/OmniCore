@@ -939,7 +939,28 @@ namespace OmniForge
 					TEXT("Manifest.Systems"),
 					TEXT("Define a non-empty SystemId for every enabled system.")
 				);
-				continue;
+				return false;
+			}
+
+			const FString SystemIdString = System.SystemId.ToString();
+			bool bInvalidSystemId = false;
+			for (const TCHAR Character : SystemIdString)
+			{
+				if (FChar::IsWhitespace(Character) || Character == TEXT('/') || Character == TEXT('\\'))
+				{
+					bInvalidSystemId = true;
+					break;
+				}
+			}
+			if (bInvalidSystemId)
+			{
+				Report.AddError(
+					TEXT("OMNI_FORGE_E021_INVALID_SYSTEMID"),
+					FString::Printf(TEXT("SystemId '%s' is invalid."), *SystemIdString),
+					TEXT("Manifest.Systems"),
+					TEXT("Use a non-empty SystemId without whitespace or path separators.")
+				);
+				return false;
 			}
 
 			if (SystemsById.Contains(System.SystemId))
@@ -950,7 +971,7 @@ namespace OmniForge
 					TEXT("Manifest.Systems"),
 					TEXT("Ensure each enabled system has a unique SystemId.")
 				);
-				continue;
+				return false;
 			}
 
 			if (System.SystemClassPath.IsEmpty())
@@ -961,6 +982,7 @@ namespace OmniForge
 					BuildIssueLocation(System.SystemId, NAME_None),
 					TEXT("Set SystemClass to a valid UOmniRuntimeSystem-derived class.")
 				);
+				return false;
 			}
 
 			SystemsById.Add(System.SystemId, &System);
@@ -982,7 +1004,7 @@ namespace OmniForge
 						BuildIssueLocation(System.SystemId, NAME_None),
 						TEXT("Remove the self dependency.")
 					);
-					continue;
+					return false;
 				}
 				if (!SystemsById.Contains(Dependency))
 				{
@@ -996,6 +1018,7 @@ namespace OmniForge
 						BuildIssueLocation(System.SystemId, NAME_None),
 						TEXT("Add the dependency system or remove this dependency.")
 					);
+					return false;
 				}
 			}
 		}
@@ -1019,6 +1042,7 @@ namespace OmniForge
 				TEXT("Manifest.Systems.Dependencies"),
 				TEXT("Break the dependency cycle so initialization can be topologically ordered.")
 			);
+			return false;
 		}
 
 		return true;
