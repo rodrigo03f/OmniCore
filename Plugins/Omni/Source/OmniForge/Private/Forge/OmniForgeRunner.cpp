@@ -999,8 +999,8 @@ namespace OmniForge
 				if (Dependency == System.SystemId)
 				{
 					Report.AddError(
-						TEXT("OMNI_FORGE_E005_MISSING_DEPENDENCY"),
-						FString::Printf(TEXT("System '%s' cannot depend on itself."), *System.SystemId.ToString()),
+						TEXT("OMNI_FORGE_E023_SELF_DEPENDENCY"),
+						FString::Printf(TEXT("Self dependency detected: system '%s' depends on itself."), *System.SystemId.ToString()),
 						BuildIssueLocation(System.SystemId, NAME_None),
 						TEXT("Remove the self dependency.")
 					);
@@ -1026,10 +1026,59 @@ namespace OmniForge
 		TArray<FName> CycleCandidates;
 		if (!BuildInitializationOrder(SystemsById, OutInitializationOrder, CycleCandidates))
 		{
+			FString ExampleChain = TEXT("(chain unavailable)");
+			if (CycleCandidates.Num() > 0)
+			{
+				const FName Start = CycleCandidates[0];
+				TArray<FName> Trace;
+				Trace.Add(Start);
+				FName Current = Start;
+				int32 Guard = 0;
+				while (Guard < 128)
+				{
+					++Guard;
+					const FOmniForgeNormalizedSystem* const* CurrentSystemPtr = SystemsById.Find(Current);
+					if (!CurrentSystemPtr || !(*CurrentSystemPtr))
+					{
+						break;
+					}
+
+					FName Next = NAME_None;
+					for (const FName Dependency : (*CurrentSystemPtr)->Dependencies)
+					{
+						if (CycleCandidates.Contains(Dependency))
+						{
+							Next = Dependency;
+							break;
+						}
+					}
+					if (Next == NAME_None)
+					{
+						break;
+					}
+
+					Trace.Add(Next);
+					if (Next == Start)
+					{
+						break;
+					}
+					Current = Next;
+				}
+
+				ExampleChain = FString::JoinBy(
+					Trace,
+					TEXT(" -> "),
+					[](const FName Name)
+					{
+						return Name.ToString();
+					}
+				);
+			}
+
 			Report.AddError(
 				TEXT("OMNI_FORGE_E006_DEPENDENCY_CYCLE"),
 				FString::Printf(
-					TEXT("Dependency cycle detected among systems: %s"),
+					TEXT("Dependency cycle detected among systems: %s | example chain: %s"),
 					*FString::JoinBy(
 						CycleCandidates,
 						TEXT(", "),
@@ -1037,7 +1086,8 @@ namespace OmniForge
 						{
 							return Name.ToString();
 						}
-					)
+					),
+					*ExampleChain
 				),
 				TEXT("Manifest.Systems.Dependencies"),
 				TEXT("Break the dependency cycle so initialization can be topologically ordered.")
