@@ -1,4 +1,5 @@
 #include "Forge/OmniForgeRunner.h"
+#include "Forge/OmniForgeContext.h"
 
 #include "Containers/StringConv.h"
 #include "GenericPlatform/GenericPlatformMisc.h"
@@ -1268,24 +1269,20 @@ namespace OmniForge
 	}
 }
 
-static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeResolved* OutResolved)
+static bool PhaseNormalize(FForgeContext& Context)
 {
-	FOmniForgeReport Report;
-	Report.ForgeVersion = OmniForge::ForgeVersion;
+	Context.EffectiveInput = Context.Input;
+	Context.EffectiveInput.GenerationRoot = OmniForge::NormalizeRootPath(Context.Input.GenerationRoot);
 
-	FOmniForgeInput EffectiveInput = Input;
-	EffectiveInput.GenerationRoot = OmniForge::NormalizeRootPath(Input.GenerationRoot);
+	Context.Manifest = nullptr;
+	OmniForge::TryResolveManifest(Context.EffectiveInput, Context.Manifest, Context.Report);
 
-	UOmniManifest* Manifest = nullptr;
-	OmniForge::TryResolveManifest(EffectiveInput, Manifest, Report);
-
-	FOmniForgeNormalized Normalized;
-	OmniForge::NormalizeManifest(Manifest, EffectiveInput, Normalized);
-	if (!Report.HasErrors())
+	OmniForge::NormalizeManifest(Context.Manifest, Context.EffectiveInput, Context.Normalized);
+	if (!Context.Report.HasErrors())
 	{
-		if (!OmniForge::ComputeNormalizedInputHash(Normalized, Report.InputHash))
+		if (!OmniForge::ComputeNormalizedInputHash(Context.Normalized, Context.Report.InputHash))
 		{
-			Report.AddError(
+			Context.Report.AddError(
 				TEXT("OMNI_FORGE_E099_INTERNAL"),
 				TEXT("Failed to compute normalized manifest SHA256."),
 				TEXT("Normalize"),
@@ -1294,47 +1291,66 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 		}
 	}
 
-	TArray<FName> InitializationOrder;
-	TArray<FOmniForgeResolvedProfile> Profiles;
-	TArray<FOmniForgeResolvedAction> Actions;
-	if (!Report.HasErrors())
+	Context.InputHash = Context.Report.InputHash;
+	return !Context.Report.HasErrors();
+}
+
+static bool PhaseValidate(FForgeContext& Context)
+{
+	if (!Context.Report.HasErrors())
 	{
 		OmniForge::ValidateAndResolve(
-			Normalized,
-			EffectiveInput.bRequireContentAssets,
-			InitializationOrder,
-			Profiles,
-			Actions,
-			Report
+			Context.Normalized,
+			Context.EffectiveInput.bRequireContentAssets,
+			Context.InitializationOrder,
+			Context.Profiles,
+			Context.Actions,
+			Context.Report
 		);
 	}
 
-	FOmniForgeResolved Resolved;
-	if (!Report.HasErrors())
+	return !Context.Report.HasErrors();
+}
+
+static bool PhaseResolve(FForgeContext& Context)
+{
+	if (!Context.Report.HasErrors())
 	{
-		OmniForge::BuildResolved(Normalized, InitializationOrder, Profiles, Actions, Report.InputHash, Resolved);
-		Report.SystemCount = Resolved.SystemsCount;
-		Report.ActionCount = Resolved.ActionsCount;
+		OmniForge::BuildResolved(
+			Context.Normalized,
+			Context.InitializationOrder,
+			Context.Profiles,
+			Context.Actions,
+			Context.Report.InputHash,
+			Context.Resolved
+		);
+		Context.Report.SystemCount = Context.Resolved.SystemsCount;
+		Context.Report.ActionCount = Context.Resolved.ActionsCount;
 	}
 	else
 	{
-		Report.SystemCount = Normalized.Systems.Num();
-		Report.ActionCount = Actions.Num();
+		Context.Report.SystemCount = Context.Normalized.Systems.Num();
+		Context.Report.ActionCount = Context.Actions.Num();
 	}
 
-	const FString SavedOmniDir = FPaths::Combine(FPaths::ProjectSavedDir(), OmniForge::SavedFolder);
-	IFileManager::Get().MakeDirectory(*SavedOmniDir, true);
-	Report.OutputReportPath = FPaths::Combine(SavedOmniDir, OmniForge::ReportFile);
-	Report.OutputResolvedManifestPath = FPaths::Combine(SavedOmniDir, OmniForge::ResolvedManifestFile);
-	const FString ResolvedManifestOutputFile = Report.OutputResolvedManifestPath;
+	return !Context.Report.HasErrors();
+}
 
-	if (!Report.HasErrors())
+static bool PhaseGenerate(FForgeContext& Context)
+{
+	Context.SavedOmniDir = FPaths::Combine(FPaths::ProjectSavedDir(), OmniForge::SavedFolder);
+	IFileManager::Get().MakeDirectory(*Context.SavedOmniDir, true);
+	Context.Report.OutputReportPath = FPaths::Combine(Context.SavedOmniDir, OmniForge::ReportFile);
+	Context.Report.OutputResolvedManifestPath = FPaths::Combine(Context.SavedOmniDir, OmniForge::ResolvedManifestFile);
+	Context.ResolvedManifestOutputFile = Context.Report.OutputResolvedManifestPath;
+
+	if (!Context.Report.HasErrors())
 	{
 		FString JsonOutput;
 		{
-			if (!OmniForge::BuildResolvedJsonString(Resolved, JsonOutput))
+			if (!OmniForge::BuildResolvedJsonString(Context.Resolved, JsonOutput))
 			{
-				Report.AddError(
+				Context.Report.AddError(
 					TEXT("OMNI_FORGE_E099_INTERNAL"),
 					TEXT("Failed to serialize ResolvedManifest JSON."),
 					TEXT("Generate"),
@@ -1343,12 +1359,12 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 			}
 		}
 
-		if (!Report.HasErrors())
+		if (!Context.Report.HasErrors())
 		{
 			FString WriteError;
-			if (!OmniForge::SaveTextFile(Report.OutputResolvedManifestPath, JsonOutput, WriteError))
+			if (!OmniForge::SaveTextFile(Context.Report.OutputResolvedManifestPath, JsonOutput, WriteError))
 			{
-				Report.AddError(
+				Context.Report.AddError(
 					TEXT("OMNI_FORGE_E099_INTERNAL"),
 					WriteError,
 					TEXT("Generate"),
@@ -1358,56 +1374,49 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 		}
 	}
 
-	Report.bPassed = !Report.HasErrors();
-	if (!Report.bPassed)
+	return !Context.Report.HasErrors();
+}
+
+static void PhaseReport(FForgeContext& Context)
+{
+	Context.Report.bPassed = !Context.Report.HasErrors();
+	if (!Context.Report.bPassed)
 	{
-		IFileManager::Get().Delete(*ResolvedManifestOutputFile, false, true, true);
-		Report.OutputResolvedManifestPath = TEXT("(not generated)");
+		IFileManager::Get().Delete(*Context.ResolvedManifestOutputFile, false, true, true);
+		Context.Report.OutputResolvedManifestPath = TEXT("(not generated)");
 	}
 
-	Report.Summary = Report.bPassed
+	Context.Report.Summary = Context.Report.bPassed
 		? FString::Printf(
 			TEXT("PASS: Normalize -> Validate -> Resolve -> Generate -> Report completed. Systems=%d Actions=%d."),
-			Report.SystemCount,
-			Report.ActionCount
+			Context.Report.SystemCount,
+			Context.Report.ActionCount
 		)
 		: FString::Printf(
 			TEXT("FAIL: pipeline aborted with %d error(s) and %d warning(s)."),
-			Report.ErrorCount,
-			Report.WarningCount
+			Context.Report.ErrorCount,
+			Context.Report.WarningCount
 		);
 
 	{
-		const FString Markdown = OmniForge::BuildReportMarkdown(Report);
+		const FString Markdown = OmniForge::BuildReportMarkdown(Context.Report);
 		FString WriteError;
-		if (!OmniForge::SaveTextFile(Report.OutputReportPath, Markdown, WriteError))
+		if (!OmniForge::SaveTextFile(Context.Report.OutputReportPath, Markdown, WriteError))
 		{
 			UE_LOG(LogOmniForge, Error, TEXT("%s"), *WriteError);
 		}
 	}
 
-	if (OutResolved)
-	{
-		if (Report.bPassed)
-		{
-			*OutResolved = MoveTemp(Resolved);
-		}
-		else
-		{
-			*OutResolved = FOmniForgeResolved();
-		}
-	}
-
-	if (Report.bPassed)
+	if (Context.Report.bPassed)
 	{
 		UE_LOG(
 			LogOmniForge,
 			Log,
 			TEXT("Forge PASS. Systems=%d Actions=%d Resolved=%s Report=%s"),
-			Report.SystemCount,
-			Report.ActionCount,
-			*Report.OutputResolvedManifestPath,
-			*Report.OutputReportPath
+			Context.Report.SystemCount,
+			Context.Report.ActionCount,
+			*Context.Report.OutputResolvedManifestPath,
+			*Context.Report.OutputReportPath
 		);
 	}
 	else
@@ -1416,12 +1425,12 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 			LogOmniForge,
 			Error,
 			TEXT("Forge FAIL. Errors=%d Warnings=%d Report=%s"),
-			Report.ErrorCount,
-			Report.WarningCount,
-			*Report.OutputReportPath
+			Context.Report.ErrorCount,
+			Context.Report.WarningCount,
+			*Context.Report.OutputReportPath
 		);
 
-		for (const FOmniForgeError& Issue : Report.Errors)
+		for (const FOmniForgeError& Issue : Context.Report.Errors)
 		{
 			if (Issue.Severity == EOmniForgeErrorSeverity::Error)
 			{
@@ -1449,8 +1458,33 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 			}
 		}
 	}
+}
 
-	return Report;
+static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeResolved* OutResolved)
+{
+	FForgeContext Context;
+	Context.Input = Input;
+	Context.Report.ForgeVersion = OmniForge::ForgeVersion;
+
+	PhaseNormalize(Context);
+	PhaseValidate(Context);
+	PhaseResolve(Context);
+	PhaseGenerate(Context);
+	PhaseReport(Context);
+
+	if (OutResolved)
+	{
+		if (Context.Report.bPassed)
+		{
+			*OutResolved = MoveTemp(Context.Resolved);
+		}
+		else
+		{
+			*OutResolved = FOmniForgeResolved();
+		}
+	}
+
+	return Context.Report;
 }
 
 FOmniForgeResult UOmniForgeRunner::Run(const FOmniForgeInput& Input)
