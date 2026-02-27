@@ -62,6 +62,15 @@ private:
 	TArray<FOmniActionDefinition> DefaultDefinitions;
 
 	UPROPERTY(Transient)
+	FString ResolvedProfileName;
+
+	UPROPERTY(Transient)
+	FString ResolvedProfileAssetPath;
+
+	UPROPERTY(Transient)
+	FString ResolvedLibraryAssetPath;
+
+	UPROPERTY(Transient)
 	TMap<FName, FOmniActionDefinition> DefinitionsById;
 
 	UPROPERTY(Transient)

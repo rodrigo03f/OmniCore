@@ -7,6 +7,7 @@
 #include "Profile/OmniActionProfile.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
+#include "HAL/IConsoleManager.h"
 #include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniActionGateSystem, Log, All);
@@ -21,10 +22,35 @@ namespace OmniActionGate
 	static const FName ManifestSettingActionProfileAssetPath(TEXT("ActionProfileAssetPath"));
 	static const TCHAR* DisallowedActionIdPrefix = TEXT("Input.");
 	static const FName DebugMetricProfileAction(TEXT("Omni.Profile.Action"));
+	static TAutoConsoleVariable<int32> CVarActionGateFailFast(
+		TEXT("omni.actiongate.failfast"),
+		-1,
+		TEXT("ActionGate validation strict mode.\n-1=Auto (strict in non-shipping, non-strict in shipping)\n0=Non-strict (log + deny/sanitize)\n1=Strict fail-fast"),
+		ECVF_Default
+	);
 
 	static FString DecisionToResult(const FOmniActionGateDecision& Decision)
 	{
 		return FString::Printf(TEXT("%s | %s"), Decision.bAllowed ? TEXT("ALLOW") : TEXT("DENY"), *Decision.Reason);
+	}
+
+	static bool IsStrictValidationEnabled()
+	{
+		const int32 CVarValue = CVarActionGateFailFast.GetValueOnGameThread();
+		if (CVarValue == 0)
+		{
+			return false;
+		}
+		if (CVarValue == 1)
+		{
+			return true;
+		}
+
+#if UE_BUILD_SHIPPING
+		return false;
+#else
+		return true;
+#endif
 	}
 }
 
@@ -58,6 +84,9 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 	}
 
 	DefaultDefinitions.Reset();
+	ResolvedProfileName.Reset();
+	ResolvedProfileAssetPath.Reset();
+	ResolvedLibraryAssetPath.Reset();
 	FString LoadError;
 	if (!TryLoadDefinitionsFromManifest(Manifest, LoadError))
 	{
@@ -79,17 +108,38 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 	RebuildDefinitionMap();
 	if (DefinitionsById.Num() == 0)
 	{
+		const bool bStrictValidation = OmniActionGate::IsStrictValidationEnabled();
 		const FString EmptyDefinitionsError = FString::Printf(
-			TEXT("Fail-fast [SystemId=%s]: no action definitions are available after profile resolution."),
-			*GetSystemId().ToString()
+			TEXT("No action definitions are available after profile resolution [SystemId=%s Profile=%s]. Configure '%s' in manifest and populate ActionLibrary '%s'."),
+			*GetSystemId().ToString(),
+			ResolvedProfileName.IsEmpty() ? TEXT("<unknown>") : *ResolvedProfileName,
+			*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
+			ResolvedLibraryAssetPath.IsEmpty() ? TEXT("<unknown>") : *ResolvedLibraryAssetPath
 		);
-		UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *EmptyDefinitionsError);
+		if (bStrictValidation)
+		{
+			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *EmptyDefinitionsError);
+		}
+		else
+		{
+			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *EmptyDefinitionsError);
+		}
 		if (DebugSubsystem.IsValid())
 		{
-			DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Failed"));
-			DebugSubsystem->LogError(OmniActionGate::CategoryName, EmptyDefinitionsError, OmniActionGate::SourceName);
+			DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, bStrictValidation ? TEXT("Failed") : TEXT("LoadedWithWarnings"));
+			if (bStrictValidation)
+			{
+				DebugSubsystem->LogError(OmniActionGate::CategoryName, EmptyDefinitionsError, OmniActionGate::SourceName);
+			}
+			else
+			{
+				DebugSubsystem->LogWarning(OmniActionGate::CategoryName, EmptyDefinitionsError, OmniActionGate::SourceName);
+			}
 		}
-		return;
+		if (bStrictValidation)
+		{
+			return;
+		}
 	}
 
 	ActiveActions.Reset();
@@ -99,7 +149,10 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 	SetInitializationResult(true);
 	if (DebugSubsystem.IsValid())
 	{
-		DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Loaded"));
+		if (DefinitionsById.Num() > 0)
+		{
+			DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Loaded"));
+		}
 	}
 
 	PublishTelemetry();
@@ -129,6 +182,9 @@ void UOmniActionGateSystem::ShutdownSystem_Implementation()
 	ActiveActions.Reset();
 	ActiveLockRefCounts.Reset();
 	LastDecision = FOmniActionGateDecision();
+	ResolvedProfileName.Reset();
+	ResolvedProfileAssetPath.Reset();
+	ResolvedLibraryAssetPath.Reset();
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -313,12 +369,16 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 )
 {
 	OutError.Reset();
+	ResolvedProfileName.Reset();
+	ResolvedProfileAssetPath.Reset();
+	ResolvedLibraryAssetPath.Reset();
 
 	if (!Manifest)
 	{
 		OutError = TEXT("Manifest is null.");
 		return false;
 	}
+	const bool bStrictValidation = OmniActionGate::IsStrictValidationEnabled();
 
 	const FName RuntimeSystemId = GetSystemId();
 	const FOmniSystemManifestEntry* SystemEntry = Manifest->FindEntryById(RuntimeSystemId);
@@ -350,18 +410,19 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		|| ProfileAssetPathValue.IsEmpty())
 	{
 		OutError = FString::Printf(
-			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Recommendation: point to an existing UOmniActionProfile asset and reference a UOmniActionLibrary."),
+			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Configure this key in the manifest entry to point to a UOmniActionProfile asset."),
 			*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
 			*RuntimeSystemId.ToString()
 		);
 	}
 	else
 	{
+		ResolvedProfileAssetPath = ProfileAssetPathValue;
 		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
 		if (ProfileAssetPath.IsNull())
 		{
 			OutError = FString::Printf(
-				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniActionProfile asset path."),
+				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Configure this setting with a valid UOmniActionProfile asset path."),
 				*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
 				*RuntimeSystemId.ToString(),
 				*ProfileAssetPathValue
@@ -373,23 +434,26 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 			if (!LoadedObject)
 			{
 				OutError = FString::Printf(
-					TEXT("Action profile asset not found for SystemId '%s': %s. Recommendation: create a UOmniActionProfile asset at this path and reference a UOmniActionLibrary."),
+					TEXT("ActionProfile asset not found for SystemId '%s': %s. Fix: create the profile asset at this path or update manifest setting '%s'."),
 					*RuntimeSystemId.ToString(),
-					*ProfileAssetPath.ToString()
+					*ProfileAssetPath.ToString(),
+					*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString()
 				);
 			}
 			else if (UOmniActionProfile* CastedProfile = Cast<UOmniActionProfile>(LoadedObject))
 			{
 				LoadedProfile = CastedProfile;
 				bLoadedFromAssetPath = true;
+				ResolvedProfileName = GetNameSafe(CastedProfile);
 			}
 			else
 			{
 				OutError = FString::Printf(
-					TEXT("Asset type mismatch for SystemId '%s': %s is '%s' (expected UOmniActionProfile). Recommendation: create a UOmniActionProfile asset at this path."),
+					TEXT("Asset type mismatch for SystemId '%s': %s is '%s' (expected UOmniActionProfile). Fix: point setting '%s' to a UOmniActionProfile asset."),
 					*RuntimeSystemId.ToString(),
 					*ProfileAssetPath.ToString(),
-					*LoadedObject->GetClass()->GetPathName()
+					*LoadedObject->GetClass()->GetPathName(),
+					*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString()
 				);
 			}
 		}
@@ -411,12 +475,14 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 	if (bLoadedFromAssetPath)
 	{
 		const FSoftObjectPath ActionLibraryPath = LoadedProfile->ActionLibrary.ToSoftObjectPath();
+		ResolvedLibraryAssetPath = ActionLibraryPath.ToString();
 		if (ActionLibraryPath.IsNull())
 		{
 			OutError = FString::Printf(
-				TEXT("Profile '%s' for SystemId '%s' has null ActionLibrary. Recommendation: set ActionLibrary to a UOmniActionLibrary asset."),
+				TEXT("Profile '%s' for SystemId '%s' has null ActionLibrary. Fix in profile asset '%s': set ActionLibrary to a UOmniActionLibrary."),
 				*GetNameSafe(LoadedProfile),
-				*RuntimeSystemId.ToString()
+				*RuntimeSystemId.ToString(),
+				ResolvedProfileAssetPath.IsEmpty() ? TEXT("<unknown>") : *ResolvedProfileAssetPath
 			);
 			return false;
 		}
@@ -425,7 +491,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		if (!LoadedLibraryObject)
 		{
 			OutError = FString::Printf(
-				TEXT("ActionLibrary not found for SystemId '%s': %s. Recommendation: create a UOmniActionLibrary asset and assign it in profile '%s'."),
+				TEXT("ActionLibrary asset not found for SystemId '%s': %s. Fix in profile '%s': assign a valid UOmniActionLibrary asset."),
 				*RuntimeSystemId.ToString(),
 				*ActionLibraryPath.ToString(),
 				*GetNameSafe(LoadedProfile)
@@ -435,10 +501,11 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		if (!Cast<UOmniActionLibrary>(LoadedLibraryObject))
 		{
 			OutError = FString::Printf(
-				TEXT("ActionLibrary type mismatch for SystemId '%s': %s is '%s' (expected UOmniActionLibrary)."),
+				TEXT("ActionLibrary type mismatch for SystemId '%s': %s is '%s' (expected UOmniActionLibrary). Fix the ActionLibrary reference in profile '%s'."),
 				*RuntimeSystemId.ToString(),
 				*ActionLibraryPath.ToString(),
-				*LoadedLibraryObject->GetClass()->GetPathName()
+				*LoadedLibraryObject->GetClass()->GetPathName(),
+				*GetNameSafe(LoadedProfile)
 			);
 			return false;
 		}
@@ -446,7 +513,174 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 
 	TArray<FOmniActionDefinition> LoadedDefinitions;
 	LoadedProfile->ResolveDefinitions(LoadedDefinitions);
+	TArray<FString> ValidationIssues;
+	const FString ProfileLabel = ResolvedProfileName.IsEmpty() ? GetNameSafe(LoadedProfile) : ResolvedProfileName;
+	const FString ProfilePathLabel = ResolvedProfileAssetPath.IsEmpty() ? TEXT("<unknown>") : ResolvedProfileAssetPath;
+	const FString LibraryPathLabel = ResolvedLibraryAssetPath.IsEmpty() ? TEXT("<unknown>") : ResolvedLibraryAssetPath;
+	auto RecordIssue = [&ValidationIssues, bStrictValidation](const FString& Issue)
+	{
+		ValidationIssues.Add(Issue);
+		if (bStrictValidation)
+		{
+			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *Issue);
+		}
+		else
+		{
+			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *Issue);
+		}
+	};
+
+	TMap<FName, int32> ActionIdCounts;
+	for (int32 DefinitionIndex = LoadedDefinitions.Num() - 1; DefinitionIndex >= 0; --DefinitionIndex)
+	{
+		FOmniActionDefinition& LoadedDefinition = LoadedDefinitions[DefinitionIndex];
+		const int32 HumanIndex = DefinitionIndex + 1;
+
+		if (LoadedDefinition.ActionId == NAME_None)
+		{
+			RecordIssue(
+				FString::Printf(
+					TEXT("ActionProfile '%s' contains definition #%d with empty ActionId. Fix: set ActionId in ActionLibrary '%s' or profile overrides."),
+					*ProfileLabel,
+					HumanIndex,
+					*LibraryPathLabel
+				)
+			);
+			if (!bStrictValidation)
+			{
+				LoadedDefinitions.RemoveAt(DefinitionIndex);
+			}
+			continue;
+		}
+
+		ActionIdCounts.FindOrAdd(LoadedDefinition.ActionId)++;
+
+		const FString ActionIdText = LoadedDefinition.ActionId.ToString();
+		if (ActionIdText.StartsWith(OmniActionGate::DisallowedActionIdPrefix, ESearchCase::CaseSensitive))
+		{
+			RecordIssue(
+				FString::Printf(
+					TEXT("ActionProfile '%s' has disallowed ActionId '%s'. Fix: rename to gameplay/system namespace (example: Movement.Sprint) in '%s'."),
+					*ProfileLabel,
+					*ActionIdText,
+					*LibraryPathLabel
+				)
+			);
+			if (!bStrictValidation)
+			{
+				LoadedDefinitions.RemoveAt(DefinitionIndex);
+			}
+			continue;
+		}
+
+		FGameplayTagContainer SanitizedBlockedBy;
+		bool bHadInvalidBlockedBy = false;
+		for (const FGameplayTag& Tag : LoadedDefinition.BlockedBy)
+		{
+			if (Tag.IsValid())
+			{
+				SanitizedBlockedBy.AddTag(Tag);
+			}
+			else
+			{
+				bHadInvalidBlockedBy = true;
+			}
+		}
+		if (bHadInvalidBlockedBy)
+		{
+			RecordIssue(
+				FString::Printf(
+					TEXT("Action '%s' in profile '%s' has invalid/empty tags in BlockedBy. Fix tags in ActionLibrary '%s'."),
+					*ActionIdText,
+					*ProfileLabel,
+					*LibraryPathLabel
+				)
+			);
+			if (!bStrictValidation)
+			{
+				LoadedDefinition.BlockedBy = MoveTemp(SanitizedBlockedBy);
+			}
+		}
+
+		FGameplayTagContainer SanitizedAppliesLocks;
+		bool bHadInvalidLocks = false;
+		for (const FGameplayTag& Tag : LoadedDefinition.AppliesLocks)
+		{
+			if (Tag.IsValid())
+			{
+				SanitizedAppliesLocks.AddTag(Tag);
+			}
+			else
+			{
+				bHadInvalidLocks = true;
+			}
+		}
+		if (bHadInvalidLocks)
+		{
+			RecordIssue(
+				FString::Printf(
+					TEXT("Action '%s' in profile '%s' has invalid/empty tags in AppliesLocks. Fix tags in ActionLibrary '%s'."),
+					*ActionIdText,
+					*ProfileLabel,
+					*LibraryPathLabel
+				)
+			);
+			if (!bStrictValidation)
+			{
+				LoadedDefinition.AppliesLocks = MoveTemp(SanitizedAppliesLocks);
+			}
+		}
+
+		for (int32 CancelIndex = LoadedDefinition.Cancels.Num() - 1; CancelIndex >= 0; --CancelIndex)
+		{
+			if (LoadedDefinition.Cancels[CancelIndex] != NAME_None)
+			{
+				continue;
+			}
+
+			RecordIssue(
+				FString::Printf(
+					TEXT("Action '%s' in profile '%s' has empty reference in Cancels. Fix the Cancels list in ActionLibrary '%s'."),
+					*ActionIdText,
+					*ProfileLabel,
+					*LibraryPathLabel
+				)
+			);
+			if (!bStrictValidation)
+			{
+				LoadedDefinition.Cancels.RemoveAt(CancelIndex);
+			}
+		}
+	}
+
+	for (const TPair<FName, int32>& Pair : ActionIdCounts)
+	{
+		if (Pair.Value <= 1)
+		{
+			continue;
+		}
+
+		RecordIssue(
+			FString::Printf(
+				TEXT("ActionProfile '%s' has duplicate ActionId '%s' (%dx). Fix duplicates in ActionLibrary '%s' and/or profile overrides."),
+				*ProfileLabel,
+				*Pair.Key.ToString(),
+				Pair.Value,
+				*LibraryPathLabel
+			)
+		);
+	}
+
+	TSet<FName> KnownActionIds;
 	for (const FOmniActionDefinition& LoadedDefinition : LoadedDefinitions)
+	{
+		if (LoadedDefinition.ActionId != NAME_None)
+		{
+			KnownActionIds.Add(LoadedDefinition.ActionId);
+		}
+	}
+
+	for (FOmniActionDefinition& LoadedDefinition : LoadedDefinitions)
 	{
 		if (LoadedDefinition.ActionId == NAME_None)
 		{
@@ -454,23 +688,61 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		}
 
 		const FString ActionIdText = LoadedDefinition.ActionId.ToString();
-		if (ActionIdText.StartsWith(OmniActionGate::DisallowedActionIdPrefix, ESearchCase::CaseSensitive))
+		for (int32 CancelIndex = LoadedDefinition.Cancels.Num() - 1; CancelIndex >= 0; --CancelIndex)
 		{
-			OutError = FString::Printf(
-				TEXT("Action profile '%s' contains disallowed ActionId '%s' for SystemId '%s'. ActionId must be gameplay/system-level (example: Movement.Sprint), not Input.*"),
-				*GetNameSafe(LoadedProfile),
-				*ActionIdText,
-				*RuntimeSystemId.ToString()
+			const FName ReferencedActionId = LoadedDefinition.Cancels[CancelIndex];
+			if (ReferencedActionId == NAME_None || KnownActionIds.Contains(ReferencedActionId))
+			{
+				continue;
+			}
+
+			RecordIssue(
+				FString::Printf(
+					TEXT("Action '%s' in profile '%s' references unknown action '%s' in Cancels. Fix: add '%s' to ActionLibrary '%s' or remove the reference."),
+					*ActionIdText,
+					*ProfileLabel,
+					*ReferencedActionId.ToString(),
+					*ReferencedActionId.ToString(),
+					*LibraryPathLabel
+				)
 			);
-			return false;
+			if (!bStrictValidation)
+			{
+				LoadedDefinition.Cancels.RemoveAt(CancelIndex);
+			}
 		}
 	}
+
+	if (bStrictValidation && ValidationIssues.Num() > 0)
+	{
+		const int32 MaxIssuesToShow = 3;
+		TArray<FString> PreviewIssues;
+		for (int32 Index = 0; Index < FMath::Min(MaxIssuesToShow, ValidationIssues.Num()); ++Index)
+		{
+			PreviewIssues.Add(ValidationIssues[Index]);
+		}
+		const FString ExtraIssuesSuffix = ValidationIssues.Num() > MaxIssuesToShow
+			? FString::Printf(TEXT(" (+%d more issue(s))"), ValidationIssues.Num() - MaxIssuesToShow)
+			: TEXT("");
+		OutError = FString::Printf(
+			TEXT("ActionProfile validation failed for SystemId '%s' [Profile=%s Path=%s Setting=%s]. %s%s"),
+			*RuntimeSystemId.ToString(),
+			*ProfileLabel,
+			*ProfilePathLabel,
+			*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
+			*FString::Join(PreviewIssues, TEXT(" | ")),
+			*ExtraIssuesSuffix
+		);
+		return false;
+	}
+
 	if (LoadedDefinitions.Num() == 0)
 	{
 		OutError = FString::Printf(
-			TEXT("Action profile '%s' resolved zero definitions for SystemId '%s'. Recommendation: populate ActionLibrary definitions."),
-			*GetNameSafe(LoadedProfile),
-			*RuntimeSystemId.ToString()
+			TEXT("Action profile '%s' resolved zero valid definitions for SystemId '%s'. Fix ActionLibrary '%s' and profile overrides."),
+			*ProfileLabel,
+			*RuntimeSystemId.ToString(),
+			*LibraryPathLabel
 		);
 		return false;
 	}
@@ -481,10 +753,21 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		UE_LOG(
 			LogOmniActionGateSystem,
 			Log,
-			TEXT("Action definitions loaded from profile: %s (Definitions=%d)"),
-			*GetNameSafe(LoadedProfile),
-			DefaultDefinitions.Num()
+			TEXT("Action definitions loaded from profile: %s (Definitions=%d, StrictValidation=%s)"),
+			*ProfileLabel,
+			DefaultDefinitions.Num(),
+			bStrictValidation ? TEXT("true") : TEXT("false")
 		);
+		if (!bStrictValidation && ValidationIssues.Num() > 0)
+		{
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Warning,
+				TEXT("ActionProfile '%s' loaded with %d validation issue(s). Invalid entries were sanitized/denied at runtime."),
+				*ProfileLabel,
+				ValidationIssues.Num()
+			);
+		}
 	}
 	else
 	{
@@ -575,6 +858,7 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 	const FOmniActionDefinition* Definition = DefinitionsById.Find(ActionId);
 	if (!Definition || !Definition->bEnabled)
 	{
+		const bool bStrictValidation = OmniActionGate::IsStrictValidationEnabled();
 		TArray<FName> KnownActionIds;
 		DefinitionsById.GenerateKeyArray(KnownActionIds);
 		KnownActionIds.Sort(FNameLexicalLess());
@@ -589,17 +873,39 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 			)
 			: TEXT("<none>");
 
-		UE_LOG(
-			LogOmniActionGateSystem,
-			Error,
-			TEXT("Action request rejected [SystemId=%s]: ActionId '%s' not found in manifest/profile definitions. KnownActions=[%s]"),
-			*GetSystemId().ToString(),
+		const FString ProfileLabel = ResolvedProfileName.IsEmpty() ? TEXT("<unknown>") : ResolvedProfileName;
+		const FString ProfilePathLabel = ResolvedProfileAssetPath.IsEmpty() ? TEXT("<unknown>") : ResolvedProfileAssetPath;
+		const FString LibraryPathLabel = ResolvedLibraryAssetPath.IsEmpty() ? TEXT("<unknown>") : ResolvedLibraryAssetPath;
+		const FString ActionNotFoundMessage = FString::Printf(
+			TEXT("Action '%s' was requested but is not available in ActionProfile '%s'. Fix: set manifest setting '%s' (SystemId '%s') to profile '%s' and ensure ActionLibrary '%s' defines this ActionId. KnownActions=[%s]"),
 			*ActionId.ToString(),
+			*ProfileLabel,
+			*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
+			*GetSystemId().ToString(),
+			*ProfilePathLabel,
+			*LibraryPathLabel,
 			*KnownActionsText
 		);
 
+		if (bStrictValidation)
+		{
+			ensureAlwaysMsgf(false, TEXT("%s"), *ActionNotFoundMessage);
+		}
+		if (bStrictValidation)
+		{
+			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *ActionNotFoundMessage);
+		}
+		else
+		{
+			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *ActionNotFoundMessage);
+		}
+
 		Decision.bAllowed = false;
-		Decision.Reason = TEXT("Acao desconhecida ou desabilitada.");
+		Decision.Reason = FString::Printf(
+			TEXT("Acao '%s' desconhecida/desabilitada no profile '%s'. Verifique ActionLibrary/manifest."),
+			*ActionId.ToString(),
+			*ProfileLabel
+		);
 		OutDecision = Decision;
 		return false;
 	}
