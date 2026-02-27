@@ -1481,22 +1481,8 @@ static void PhaseReport(FForgeContext& Context)
 	}
 }
 
-static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeResolved* OutResolved)
+static FOmniForgeReport FinalizePipeline(FForgeContext& Context, FOmniForgeResolved* OutResolved)
 {
-	FForgeContext Context;
-	Context.Input = Input;
-	Context.Report.ForgeVersion = OmniForge::ForgeVersion;
-
-	PhaseNormalize(Context);
-	if (!Validate(Context))
-	{
-		Resolve(Context);
-	}
-	else if (!Resolve(Context))
-	{
-		// Keep flow unchanged: Generate/Report still execute for failure output.
-	}
-	PhaseGenerate(Context);
 	PhaseReport(Context);
 
 	if (OutResolved)
@@ -1512,6 +1498,46 @@ static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeReso
 	}
 
 	return Context.Report;
+}
+
+static FOmniForgeReport AbortPipeline(FForgeContext& Context, FOmniForgeResolved* OutResolved, const bool bResolveForCounts)
+{
+	if (bResolveForCounts)
+	{
+		Resolve(Context);
+	}
+
+	PhaseGenerate(Context);
+	return FinalizePipeline(Context, OutResolved);
+}
+
+static FOmniForgeReport RunInternal(const FOmniForgeInput& Input, FOmniForgeResolved* OutResolved)
+{
+	FForgeContext Context;
+	Context.Input = Input;
+	Context.Report.ForgeVersion = OmniForge::ForgeVersion;
+
+	if (!PhaseNormalize(Context))
+	{
+		return AbortPipeline(Context, OutResolved, true);
+	}
+
+	if (!Validate(Context))
+	{
+		return AbortPipeline(Context, OutResolved, true);
+	}
+
+	if (!Resolve(Context))
+	{
+		return AbortPipeline(Context, OutResolved, false);
+	}
+
+	if (!PhaseGenerate(Context))
+	{
+		return FinalizePipeline(Context, OutResolved);
+	}
+
+	return FinalizePipeline(Context, OutResolved);
 }
 
 FOmniForgeResult UOmniForgeRunner::Run(const FOmniForgeInput& Input)
