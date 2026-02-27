@@ -19,8 +19,6 @@ namespace OmniActionGate
 	static const FName QueryIsActionActive(TEXT("IsActionActive"));
 	static const FName StatusSystemId(TEXT("Status"));
 	static const FName ManifestSettingActionProfileAssetPath(TEXT("ActionProfileAssetPath"));
-	static const FName ManifestSettingActionProfileClassPath(TEXT("ActionProfileClassPath"));
-	static const TCHAR* DefaultActionProfileAssetPath = TEXT("/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default");
 	static const TCHAR* DisallowedActionIdPrefix = TEXT("Input.");
 	static const FName DebugMetricProfileAction(TEXT("Omni.Profile.Action"));
 
@@ -60,47 +58,29 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 	}
 
 	DefaultDefinitions.Reset();
-	const bool bDevDefaultsEnabled = Registry.IsValid() && Registry->IsDevDefaultsEnabled();
 	FString LoadError;
-	if (!TryLoadDefinitionsFromManifest(Manifest, bDevDefaultsEnabled, LoadError))
+	if (!TryLoadDefinitionsFromManifest(Manifest, LoadError))
 	{
-		if (!bDevDefaultsEnabled)
+		UE_LOG(
+			LogOmniActionGateSystem,
+			Error,
+			TEXT("Fail-fast [SystemId=%s]: %s"),
+			*GetSystemId().ToString(),
+			*LoadError
+		);
+		if (DebugSubsystem.IsValid())
 		{
-			UE_LOG(
-				LogOmniActionGateSystem,
-				Error,
-				TEXT("Fail-fast [SystemId=%s]: %s"),
-				*GetSystemId().ToString(),
-				*LoadError
-			);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniActionGate::CategoryName, LoadError, OmniActionGate::SourceName);
-			}
-			return;
+			DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Failed"));
+			DebugSubsystem->LogError(OmniActionGate::CategoryName, LoadError, OmniActionGate::SourceName);
 		}
-
-		if (!BuildDevFallbackDefinitionsIfNeeded())
-		{
-			const FString FallbackError = LoadError.IsEmpty()
-				? TEXT("DEV defaults enabled, but ActionGate fallback failed to produce definitions.")
-				: FString::Printf(TEXT("%s | DEV defaults fallback also failed."), *LoadError);
-			UE_LOG(LogOmniActionGateSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *FallbackError);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniActionGate::DebugMetricProfileAction, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniActionGate::CategoryName, FallbackError, OmniActionGate::SourceName);
-			}
-			return;
-		}
+		return;
 	}
 
 	RebuildDefinitionMap();
 	if (DefinitionsById.Num() == 0)
 	{
 		const FString EmptyDefinitionsError = FString::Printf(
-			TEXT("Fail-fast [SystemId=%s]: no action definitions are available after profile/fallback resolution."),
+			TEXT("Fail-fast [SystemId=%s]: no action definitions are available after profile resolution."),
 			*GetSystemId().ToString()
 		);
 		UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *EmptyDefinitionsError);
@@ -329,7 +309,6 @@ FOmniActionGateDecision UOmniActionGateSystem::GetLastDecision() const
 
 bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 	const UOmniManifest* Manifest,
-	const bool bAllowDevDefaults,
 	FString& OutError
 )
 {
@@ -365,17 +344,15 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 
 	UOmniActionProfile* LoadedProfile = nullptr;
 	bool bLoadedFromAssetPath = false;
-	bool bLoadedFromClassPath = false;
 
 	FString ProfileAssetPathValue;
 	if (!SystemEntry->TryGetSetting(OmniActionGate::ManifestSettingActionProfileAssetPath, ProfileAssetPathValue)
 		|| ProfileAssetPathValue.IsEmpty())
 	{
 		OutError = FString::Printf(
-			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Expected path: %s. Recommendation: create a UOmniActionProfile asset at the expected path and reference a UOmniActionLibrary."),
+			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Recommendation: point to an existing UOmniActionProfile asset and reference a UOmniActionLibrary."),
 			*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
-			*RuntimeSystemId.ToString(),
-			OmniActionGate::DefaultActionProfileAssetPath
+			*RuntimeSystemId.ToString()
 		);
 	}
 	else
@@ -384,11 +361,10 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		if (ProfileAssetPath.IsNull())
 		{
 			OutError = FString::Printf(
-				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniActionProfile asset path (expected: %s)."),
+				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniActionProfile asset path."),
 				*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString(),
 				*RuntimeSystemId.ToString(),
-				*ProfileAssetPathValue,
-				OmniActionGate::DefaultActionProfileAssetPath
+				*ProfileAssetPathValue
 			);
 		}
 		else
@@ -419,47 +395,14 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		}
 	}
 
-	if (!LoadedProfile && bAllowDevDefaults)
-	{
-		FString ProfileClassPathValue;
-		if (SystemEntry->TryGetSetting(OmniActionGate::ManifestSettingActionProfileClassPath, ProfileClassPathValue))
-		{
-			const FSoftClassPath ProfileClassPath(ProfileClassPathValue);
-			if (!ProfileClassPath.IsNull())
-			{
-				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniActionProfile>();
-				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniActionProfile::StaticClass()))
-				{
-					if (OutError.IsEmpty())
-					{
-						OutError = FString::Printf(
-							TEXT("Action profile class fallback invalid for SystemId '%s': %s."),
-							*RuntimeSystemId.ToString(),
-							*ProfileClassPath.ToString()
-						);
-					}
-					else
-					{
-						OutError += FString::Printf(TEXT(" Class fallback invalid: %s."), *ProfileClassPath.ToString());
-					}
-				}
-				else
-				{
-					LoadedProfile = NewObject<UOmniActionProfile>(this, LoadedClass, NAME_None, RF_Transient);
-					bLoadedFromClassPath = true;
-				}
-			}
-		}
-	}
-
 	if (!LoadedProfile)
 	{
 		if (OutError.IsEmpty())
 		{
 			OutError = FString::Printf(
-				TEXT("Failed to resolve action profile for SystemId '%s'. Expected path: %s."),
+				TEXT("Failed to resolve action profile for SystemId '%s' using setting '%s'."),
 				*RuntimeSystemId.ToString(),
-				OmniActionGate::DefaultActionProfileAssetPath
+				*OmniActionGate::ManifestSettingActionProfileAssetPath.ToString()
 			);
 		}
 		return false;
@@ -533,16 +476,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 	}
 
 	DefaultDefinitions = MoveTemp(LoadedDefinitions);
-	if (bLoadedFromClassPath || LoadedProfile->GetClass()->IsChildOf(UOmniDevActionProfile::StaticClass()))
-	{
-		UE_LOG(
-			LogOmniActionGateSystem,
-			Warning,
-			TEXT("Action definitions loaded from DEV_FALLBACK profile class: %s"),
-			*LoadedProfile->GetClass()->GetPathName()
-		);
-	}
-	else
+	if (bLoadedFromAssetPath)
 	{
 		UE_LOG(
 			LogOmniActionGateSystem,
@@ -552,57 +486,17 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 			DefaultDefinitions.Num()
 		);
 	}
+	else
+	{
+		OutError = FString::Printf(
+			TEXT("Action definitions for SystemId '%s' were not loaded from an asset-backed profile."),
+			*RuntimeSystemId.ToString()
+		);
+		return false;
+	}
 
 	OutError.Reset();
 	return true;
-}
-
-bool UOmniActionGateSystem::BuildDevFallbackDefinitionsIfNeeded()
-{
-	if (DefaultDefinitions.Num() > 0)
-	{
-		return true;
-	}
-
-	static bool bWarnedDevDefaultsThisSession = false;
-	if (!bWarnedDevDefaultsThisSession)
-	{
-		UE_LOG(LogOmniActionGateSystem, Warning, TEXT("DEV_DEFAULTS ACTIVE: ActionGate is using fallback definitions."));
-		bWarnedDevDefaultsThisSession = true;
-	}
-
-	UOmniDevActionProfile* DevProfile = NewObject<UOmniDevActionProfile>(this, NAME_None, RF_Transient);
-	if (DevProfile)
-	{
-		DevProfile->ResolveDefinitions(DefaultDefinitions);
-	}
-
-	if (DefaultDefinitions.Num() > 0)
-	{
-		UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK profile instance."));
-		return true;
-	}
-
-	UE_LOG(LogOmniActionGateSystem, Warning, TEXT("Action definitions loaded from DEV_FALLBACK inline C++."));
-
-	FOmniActionDefinition SprintAction;
-	SprintAction.ActionId = TEXT("Movement.Sprint");
-	SprintAction.Policy = EOmniActionPolicy::DenyIfActive;
-
-	const FGameplayTag ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
-	if (ExhaustedTag.IsValid())
-	{
-		SprintAction.BlockedBy.AddTag(ExhaustedTag);
-	}
-
-	const FGameplayTag SprintLockTag = FGameplayTag::RequestGameplayTag(TEXT("Lock.Movement.Sprint"), false);
-	if (SprintLockTag.IsValid())
-	{
-		SprintAction.AppliesLocks.AddTag(SprintLockTag);
-	}
-
-	DefaultDefinitions.Add(MoveTemp(SprintAction));
-	return DefaultDefinitions.Num() > 0;
 }
 
 void UOmniActionGateSystem::RebuildDefinitionMap()
@@ -681,6 +575,29 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 	const FOmniActionDefinition* Definition = DefinitionsById.Find(ActionId);
 	if (!Definition || !Definition->bEnabled)
 	{
+		TArray<FName> KnownActionIds;
+		DefinitionsById.GenerateKeyArray(KnownActionIds);
+		KnownActionIds.Sort(FNameLexicalLess());
+		const FString KnownActionsText = KnownActionIds.Num() > 0
+			? FString::JoinBy(
+				KnownActionIds,
+				TEXT(", "),
+				[](const FName KnownId)
+				{
+					return KnownId.ToString();
+				}
+			)
+			: TEXT("<none>");
+
+		UE_LOG(
+			LogOmniActionGateSystem,
+			Error,
+			TEXT("Action request rejected [SystemId=%s]: ActionId '%s' not found in manifest/profile definitions. KnownActions=[%s]"),
+			*GetSystemId().ToString(),
+			*ActionId.ToString(),
+			*KnownActionsText
+		);
+
 		Decision.bAllowed = false;
 		Decision.Reason = TEXT("Acao desconhecida ou desabilitada.");
 		OutDecision = Decision;
