@@ -19,6 +19,9 @@ namespace OmniActionGate
 	static const FName SystemId(TEXT("ActionGate"));
 	static const FName QueryIsActionActive(TEXT("IsActionActive"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName EventOnActionStarted(TEXT("OnActionStarted"));
+	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
+	static const FName EventOnActionDenied(TEXT("OnActionDenied"));
 	static const FName ManifestSettingActionProfileAssetPath(TEXT("ActionProfileAssetPath"));
 	static const TCHAR* DisallowedActionIdPrefix = TEXT("Input.");
 	static const FName DebugMetricProfileAction(TEXT("Omni.Profile.Action"));
@@ -305,12 +308,14 @@ bool UOmniActionGateSystem::StopAction(const FName ActionId, const FName Reason)
 	{
 		ActiveActions.Remove(ActionId);
 		PublishTelemetry();
+		BroadcastActionLifecycleEvent(OmniActionGate::EventOnActionEnded, ActionId, FString(), Reason);
 		return true;
 	}
 
 	RemoveActionLocks(*Definition);
 	ActiveActions.Remove(ActionId);
 	PublishTelemetry();
+	BroadcastActionLifecycleEvent(OmniActionGate::EventOnActionEnded, ActionId, FString(), Reason);
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -967,6 +972,7 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 
 		ActiveActions.Add(ActionId);
 		AddActionLocks(*Definition);
+		BroadcastActionLifecycleEvent(OmniActionGate::EventOnActionStarted, ActionId);
 	}
 
 	Decision.bAllowed = true;
@@ -1028,6 +1034,34 @@ void UOmniActionGateSystem::RemoveActionLocks(const FOmniActionDefinition& Defin
 	}
 }
 
+void UOmniActionGateSystem::BroadcastActionLifecycleEvent(
+	const FName EventName,
+	const FName ActionId,
+	const FString& Reason,
+	const FName EndReason
+)
+{
+	if (!Registry.IsValid() || EventName == NAME_None || ActionId == NAME_None)
+	{
+		return;
+	}
+
+	FOmniEventMessage Event;
+	Event.SourceSystem = OmniActionGate::SystemId;
+	Event.EventName = EventName;
+	Event.SetPayloadValue(TEXT("ActionId"), ActionId.ToString());
+	if (!Reason.IsEmpty())
+	{
+		Event.SetPayloadValue(TEXT("Reason"), Reason);
+	}
+	if (EndReason != NAME_None)
+	{
+		Event.SetPayloadValue(TEXT("EndReason"), EndReason.ToString());
+	}
+
+	Registry->BroadcastEvent(Event);
+}
+
 void UOmniActionGateSystem::PublishTelemetry()
 {
 	if (!DebugSubsystem.IsValid())
@@ -1065,6 +1099,11 @@ void UOmniActionGateSystem::PublishDecision(const FOmniActionGateDecision& Decis
 	if (!bEmitLogEntry)
 	{
 		return;
+	}
+
+	if (!Decision.bAllowed)
+	{
+		BroadcastActionLifecycleEvent(OmniActionGate::EventOnActionDenied, Decision.ActionId, Decision.Reason);
 	}
 
 	if (Decision.bAllowed)

@@ -49,6 +49,7 @@ public:
 private:
 	bool TryLoadDefinitionsFromManifest(const UOmniManifest* Manifest, FString& OutError);
 	void RebuildDefinitionMap();
+	void BroadcastActionLifecycleEvent(FName EventName, FName ActionId, const FString& Reason = FString(), FName EndReason = NAME_None);
 	FGameplayTagContainer BuildCurrentBlockingContext() const;
 	bool EvaluateStartAction(FName ActionId, FOmniActionGateDecision& OutDecision, bool bApplyChanges);
 	static bool TryParseActionId(const FOmniQueryMessage& Query, FName& OutActionId);
