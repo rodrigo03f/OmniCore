@@ -168,6 +168,27 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: $($uproject.FullName)"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: $editorCmd"
 
+      - name: Build OmniSandboxEditor for Forge Gate
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $editorCmd = "${{ steps.forge_env.outputs.editor_cmd_path }}"
+          $engineRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $editorCmd) "..\\..\\.."))
+          $buildBat = Join-Path $engineRoot "Build\\BatchFiles\\Build.bat"
+
+          if (-not (Test-Path $buildBat)) {
+            throw "Build.bat not found at '$buildBat'."
+          }
+
+          & $buildBat OmniSandboxEditor Win64 Development `
+            -Project="${{ steps.forge_env.outputs.uproject_path }}" `
+            -NoHotReloadFromIDE `
+            -WaitMutex
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Build OmniSandboxEditor failed with exit code $LASTEXITCODE."
+          }
+
       - name: Run Forge Headless (single gate)
         run: |
           $ErrorActionPreference = "Stop"
