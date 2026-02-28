@@ -2,6 +2,7 @@
 
 Data: 2026-02-28
 Status oficial: B1 HARD CLOSE (2026-02-28)
+Release publica: 0.1.0
 Objetivo: consolidar o estado real do projeto e evitar deriva estrategica.
 
 ## 1) Estado atual

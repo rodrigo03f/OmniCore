@@ -15,6 +15,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate Omni Version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pluginPath = "Plugins/Omni/Omni.uplugin"
+          $plugin = Get-Content -Raw $pluginPath | ConvertFrom-Json
+          $version = [string]$plugin.VersionName
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Version"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- VersionName: $version"
+
+          if ($version -ne "0.1.0") {
+            throw "Unexpected Omni version '$version'. Expected '0.1.0'."
+          }
+
       - name: Run Omni Conformance Gate
         shell: pwsh
         run: |
