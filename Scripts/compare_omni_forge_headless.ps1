@@ -4,6 +4,7 @@ param(
     [string]$EditorCmdPath = "",
     [string]$UProject = "",
     [string]$ForgeExecCmd = "omni.forge.run manifestClass=/Script/OmniRuntime.OmniOfficialManifest requireContentAssets=1 root=/Game/Data",
+    [string]$DisablePlugins = "RiderLink",
     [string]$Artifact = "Saved/Omni/ResolvedManifest.json",
     [int]$RunTimeoutSeconds = 600,
     [string]$DiagnosticsDir = "",
@@ -188,6 +189,9 @@ function Invoke-ForgeHeadlessRun {
     )
     if (-not $NoNullRHI) {
         $args += "-nullrhi"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DisablePlugins)) {
+        $args += "-DisablePlugins=$DisablePlugins"
     }
     $args += $execCmdsArg
 
