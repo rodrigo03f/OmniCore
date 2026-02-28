@@ -98,9 +98,6 @@ jobs:
 
       - name: Resolve Forge Environment
         id: forge_env
-        env:
-          OMNI_ENGINE_ROOT: ${{ vars.OMNI_ENGINE_ROOT }}
-          OMNI_UNREAL_EDITOR_CMD: ${{ vars.OMNI_UNREAL_EDITOR_CMD }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -110,9 +107,18 @@ jobs:
             throw "No .uproject file found at repository root."
           }
 
-          $editorCmd = $env:OMNI_UNREAL_EDITOR_CMD
-          if ([string]::IsNullOrWhiteSpace($editorCmd) -and -not [string]::IsNullOrWhiteSpace($env:OMNI_ENGINE_ROOT)) {
-            $editorCmd = Join-Path $env:OMNI_ENGINE_ROOT "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+          $editorCmd = "${{ vars.OMNI_UNREAL_EDITOR_CMD }}"
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            $editorCmd = $env:OMNI_UNREAL_EDITOR_CMD
+          }
+
+          $engineRoot = "${{ vars.OMNI_ENGINE_ROOT }}"
+          if ([string]::IsNullOrWhiteSpace($engineRoot)) {
+            $engineRoot = $env:OMNI_ENGINE_ROOT
+          }
+
+          if ([string]::IsNullOrWhiteSpace($editorCmd) -and -not [string]::IsNullOrWhiteSpace($engineRoot)) {
+            $editorCmd = Join-Path $engineRoot "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
           }
           if ([string]::IsNullOrWhiteSpace($editorCmd)) {
             $editorCmdInPath = Get-Command "UnrealEditor-Cmd.exe" -ErrorAction SilentlyContinue
@@ -202,9 +208,9 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Latest headless log (tail 300)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```text"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
             Get-Content -Path $latestDiagLog.FullName -Tail 300 | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in $diagDir."
           }
