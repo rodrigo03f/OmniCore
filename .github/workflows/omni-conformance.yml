@@ -50,16 +50,95 @@ jobs:
       - self-hosted
       - windows
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare Forge Workspace
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Remove-PathWithRetry {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [int]$MaxAttempts = 5
+            )
+
+            if (-not (Test-Path $Path)) {
+              return
+            }
+
+            for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+              try {
+                Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+                return
+              } catch {
+                if ($attempt -eq $MaxAttempts) {
+                  throw "Failed to remove '$Path' after $MaxAttempts attempts. Last error: $($_.Exception.Message)"
+                }
+                Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+              }
+            }
+          }
+
+          Get-Process -Name UnrealEditor-Cmd,UnrealEditor -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 2
+
+          git reset --hard HEAD
+          git clean -xfd
+
+          Remove-PathWithRetry -Path "Saved"
+          Remove-PathWithRetry -Path "Intermediate"
+          Remove-PathWithRetry -Path "DerivedDataCache"
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Workspace cleanup: completed (Saved/, Intermediate/, DerivedDataCache/)."
+
+      - name: Diagnose PowerShell Environment
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Host "=== PowerShell host diagnostics ==="
+          Write-Host "--- where pwsh ---"
+          where.exe pwsh
+          Write-Host "--- where powershell ---"
+          where.exe powershell
+          Write-Host "--- PATH ---"
+          Write-Host $env:PATH
+          Write-Host "--- Get-Command pwsh ---"
+          Get-Command pwsh -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- Get-Command powershell ---"
+          Get-Command powershell -ErrorAction SilentlyContinue | Format-List *
+
+      - name: Resolve PowerShell Host
+        id: ps_host
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $pwsh7 = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+          if (Test-Path $pwsh7) {
+            "ps_exe=$pwsh7" >> $env:GITHUB_OUTPUT
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host (preferred): $pwsh7"
+            exit 0
+          }
+
+          $legacy = (Get-Command powershell -ErrorAction SilentlyContinue).Source
+          if ([string]::IsNullOrWhiteSpace($legacy)) {
+            $legacy = "$env:WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          }
+          if (-not (Test-Path $legacy)) {
+            throw "No usable PowerShell executable found for omni-forge-gate."
+          }
+
+          "ps_exe=$legacy" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host (fallback): $legacy"
+
       - name: Resolve Forge Environment
         id: forge_env
-        shell: pwsh
-        env:
-          OMNI_ENGINE_ROOT: ${{ vars.OMNI_ENGINE_ROOT }}
-          OMNI_UNREAL_EDITOR_CMD: ${{ vars.OMNI_UNREAL_EDITOR_CMD }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -69,9 +148,32 @@ jobs:
             throw "No .uproject file found at repository root."
           }
 
-          $editorCmd = $env:OMNI_UNREAL_EDITOR_CMD
-          if ([string]::IsNullOrWhiteSpace($editorCmd) -and -not [string]::IsNullOrWhiteSpace($env:OMNI_ENGINE_ROOT)) {
-            $editorCmd = Join-Path $env:OMNI_ENGINE_ROOT "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+          $editorCmd = "${{ vars.OMNI_UNREAL_EDITOR_CMD }}"
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            $editorCmd = $env:OMNI_UNREAL_EDITOR_CMD
+          }
+
+          $engineRoot = "${{ vars.OMNI_ENGINE_ROOT }}"
+          if ([string]::IsNullOrWhiteSpace($engineRoot)) {
+            $engineRoot = $env:OMNI_ENGINE_ROOT
+          }
+
+          if ([string]::IsNullOrWhiteSpace($editorCmd) -and -not [string]::IsNullOrWhiteSpace($engineRoot)) {
+            $editorCmd = Join-Path $engineRoot "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+          }
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            $pathCandidates = @(
+              "D:\\Epic Games\\UE_5.7\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "$env:ProgramFiles\\Epic Games\\UE_5.7\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "D:\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "$env:ProgramFiles\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+            )
+            foreach ($candidate in $pathCandidates) {
+              if (Test-Path $candidate) {
+                $editorCmd = $candidate
+                break
+              }
+            }
           }
           if ([string]::IsNullOrWhiteSpace($editorCmd)) {
             $editorCmdInPath = Get-Command "UnrealEditor-Cmd.exe" -ErrorAction SilentlyContinue
@@ -84,7 +186,7 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe was not resolved."
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Set repository variable \`OMNI_UNREAL_EDITOR_CMD\` (full exe path) or \`OMNI_ENGINE_ROOT\`."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Set repository variable OMNI_UNREAL_EDITOR_CMD (full exe path) or OMNI_ENGINE_ROOT."
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- This gate requires a Windows self-hosted runner with Unreal installed."
             throw "UnrealEditor-Cmd.exe not resolved."
           }
@@ -94,7 +196,7 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe path does not exist."
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Path: \`$editorCmd\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Path: $editorCmd"
             throw "UnrealEditor-Cmd.exe not found at '$editorCmd'."
           }
 
@@ -104,14 +206,35 @@ jobs:
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: \`$($uproject.FullName)\`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: \`$editorCmd\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: $($uproject.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: $editorCmd"
 
-      - name: Run Forge Headless (single gate)
-        shell: pwsh
+      - name: Build OmniSandboxEditor for Forge Gate
         run: |
           $ErrorActionPreference = "Stop"
-          & .\Scripts\compare_omni_forge_headless.ps1 `
+
+          $editorCmd = "${{ steps.forge_env.outputs.editor_cmd_path }}"
+          $engineRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $editorCmd) "..\\.."))
+          $buildBat = Join-Path $engineRoot "Build\\BatchFiles\\Build.bat"
+
+          if (-not (Test-Path $buildBat)) {
+            throw "Build.bat not found at '$buildBat'."
+          }
+
+          & $buildBat OmniSandboxEditor Win64 Development `
+            -Project="${{ steps.forge_env.outputs.uproject_path }}" `
+            -NoHotReloadFromIDE `
+            -WaitMutex
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Build OmniSandboxEditor failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run Forge Headless (single gate)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
+          & $psExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1 `
             -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
             -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
             -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
@@ -122,10 +245,10 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Run Forge Determinism Compare
-        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & .\Scripts\compare_omni_forge_headless.ps1 `
+          $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
+          & $psExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1 `
             -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
             -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
             -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
@@ -134,9 +257,30 @@ jobs:
             -RunTimeoutSeconds 900
           exit $LASTEXITCODE
 
+      - name: Publish Forge Compare Summary
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $summaryPath = Join-Path "${{ steps.forge_env.outputs.project_root }}" "Saved\\Logs\\Automation\\forge_headless\\forge_compare_summary.json"
+          if (-not (Test-Path $summaryPath)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Forge compare summary file not found: $summaryPath"
+            exit 0
+          }
+
+          $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Forge Compare Summary"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Status: $($summary.status)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- DurationSeconds: $($summary.durationSeconds)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ArtifactPath: $($summary.artifactPath)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- DiagnosticsDir: $($summary.diagnosticsDir)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Hash1: $($summary.hash1)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Hash2: $($summary.hash2)"
+
       - name: Forge Failure Summary
         if: failure()
-        shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
@@ -147,10 +291,10 @@ jobs:
           $diagDir = "Saved/Logs/Automation/forge_headless"
 
           if (-not (Test-Path $resolvedPath)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: \`$resolvedPath\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: $resolvedPath"
           }
           if (-not (Test-Path $reportPath)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: \`$reportPath\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: $reportPath"
           }
 
           $latestDiagLog = Get-ChildItem -Path $diagDir -Filter *.log -File -ErrorAction SilentlyContinue |
@@ -158,15 +302,15 @@ jobs:
             Select-Object -First 1
 
           if ($latestDiagLog) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Latest headless log: \`$($latestDiagLog.FullName)\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Latest headless log: $($latestDiagLog.FullName)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Latest headless log (tail 300)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```text"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```text'
             Get-Content -Path $latestDiagLog.FullName -Tail 300 | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
           } else {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in \`$diagDir\`."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in $diagDir."
           }
 
       - name: Upload Forge Artifacts
