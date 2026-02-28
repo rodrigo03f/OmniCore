@@ -43,3 +43,141 @@ jobs:
 
           & .\Scripts\omni_conformance_gate.ps1
           exit $LASTEXITCODE
+
+  omni-forge-gate:
+    name: Omni Forge Determinism Gate
+    runs-on:
+      - self-hosted
+      - windows
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Forge Environment
+        id: forge_env
+        shell: pwsh
+        env:
+          OMNI_ENGINE_ROOT: ${{ vars.OMNI_ENGINE_ROOT }}
+          OMNI_UNREAL_EDITOR_CMD: ${{ vars.OMNI_UNREAL_EDITOR_CMD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $projectRoot = (Get-Location).Path
+          $uproject = Get-ChildItem -Path $projectRoot -Filter *.uproject -File | Select-Object -First 1
+          if (-not $uproject) {
+            throw "No .uproject file found at repository root."
+          }
+
+          $editorCmd = $env:OMNI_UNREAL_EDITOR_CMD
+          if ([string]::IsNullOrWhiteSpace($editorCmd) -and -not [string]::IsNullOrWhiteSpace($env:OMNI_ENGINE_ROOT)) {
+            $editorCmd = Join-Path $env:OMNI_ENGINE_ROOT "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+          }
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            $editorCmdInPath = Get-Command "UnrealEditor-Cmd.exe" -ErrorAction SilentlyContinue
+            if ($editorCmdInPath -and -not [string]::IsNullOrWhiteSpace($editorCmdInPath.Source)) {
+              $editorCmd = $editorCmdInPath.Source
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe was not resolved."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Set repository variable \`OMNI_UNREAL_EDITOR_CMD\` (full exe path) or \`OMNI_ENGINE_ROOT\`."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- This gate requires a Windows self-hosted runner with Unreal installed."
+            throw "UnrealEditor-Cmd.exe not resolved."
+          }
+
+          $editorCmd = [System.IO.Path]::GetFullPath($editorCmd)
+          if (-not (Test-Path $editorCmd)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe path does not exist."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Path: \`$editorCmd\`"
+            throw "UnrealEditor-Cmd.exe not found at '$editorCmd'."
+          }
+
+          "project_root=$projectRoot" >> $env:GITHUB_OUTPUT
+          "uproject_path=$($uproject.FullName)" >> $env:GITHUB_OUTPUT
+          "editor_cmd_path=$editorCmd" >> $env:GITHUB_OUTPUT
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: \`$($uproject.FullName)\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: \`$editorCmd\`"
+
+      - name: Run Forge Headless (single gate)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\Scripts\compare_omni_forge_headless.ps1 `
+            -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
+            -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
+            -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
+            -ForgeExecCmd "omni.forge.run manifestClass=/Script/OmniRuntime.OmniOfficialManifest requireContentAssets=1 root=/Game/Data" `
+            -DiagnosticsDir "Saved/Logs/Automation/forge_headless" `
+            -RunTimeoutSeconds 900 `
+            -SingleRunOnly
+          exit $LASTEXITCODE
+
+      - name: Run Forge Determinism Compare
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\Scripts\compare_omni_forge_headless.ps1 `
+            -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
+            -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
+            -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
+            -ForgeExecCmd "omni.forge.run manifestClass=/Script/OmniRuntime.OmniOfficialManifest requireContentAssets=1 root=/Game/Data" `
+            -DiagnosticsDir "Saved/Logs/Automation/forge_headless" `
+            -RunTimeoutSeconds 900
+          exit $LASTEXITCODE
+
+      - name: Forge Failure Summary
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Forge Failure Diagnostics"
+
+          $resolvedPath = "Saved/Omni/ResolvedManifest.json"
+          $reportPath = "Saved/Omni/ForgeReport.md"
+          $diagDir = "Saved/Logs/Automation/forge_headless"
+
+          if (-not (Test-Path $resolvedPath)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: \`$resolvedPath\`"
+          }
+          if (-not (Test-Path $reportPath)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: \`$reportPath\`"
+          }
+
+          $latestDiagLog = Get-ChildItem -Path $diagDir -Filter *.log -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if ($latestDiagLog) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Latest headless log: \`$($latestDiagLog.FullName)\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Latest headless log (tail 300)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```text"
+            Get-Content -Path $latestDiagLog.FullName -Tail 300 | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in \`$diagDir\`."
+          }
+
+      - name: Upload Forge Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omni-forge-headless-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            Saved/Logs/Automation/forge_headless/**
+            Saved/Logs/*.log
+            Saved/Logs/Automation/**
+            Saved/Omni/ForgeReport.md
+            Saved/Omni/ResolvedManifest.json
