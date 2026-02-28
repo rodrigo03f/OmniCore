@@ -173,7 +173,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $editorCmd = "${{ steps.forge_env.outputs.editor_cmd_path }}"
-          $engineRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $editorCmd) "..\\..\\.."))
+          $engineRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $editorCmd) "..\\.."))
           $buildBat = Join-Path $engineRoot "Build\\BatchFiles\\Build.bat"
 
           if (-not (Test-Path $buildBat)) {
