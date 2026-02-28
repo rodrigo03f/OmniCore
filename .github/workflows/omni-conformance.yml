@@ -121,6 +121,20 @@ jobs:
             $editorCmd = Join-Path $engineRoot "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
           }
           if ([string]::IsNullOrWhiteSpace($editorCmd)) {
+            $pathCandidates = @(
+              "D:\\Epic Games\\UE_5.7\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "$env:ProgramFiles\\Epic Games\\UE_5.7\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "D:\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe",
+              "$env:ProgramFiles\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+            )
+            foreach ($candidate in $pathCandidates) {
+              if (Test-Path $candidate) {
+                $editorCmd = $candidate
+                break
+              }
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($editorCmd)) {
             $editorCmdInPath = Get-Command "UnrealEditor-Cmd.exe" -ErrorAction SilentlyContinue
             if ($editorCmdInPath -and -not [string]::IsNullOrWhiteSpace($editorCmdInPath.Source)) {
               $editorCmd = $editorCmdInPath.Source
