@@ -1,11 +1,14 @@
 param(
     [string]$ProjectRoot = "",
     [string]$EngineRoot = "D:\\Epic Games\\UE_5.7",
+    [string]$EditorCmdPath = "",
     [string]$UProject = "",
     [string]$ForgeExecCmd = "omni.forge.run manifestClass=/Script/OmniRuntime.OmniOfficialManifest requireContentAssets=1 root=/Game/Data",
     [string]$Artifact = "Saved/Omni/ResolvedManifest.json",
     [int]$RunTimeoutSeconds = 600,
-    [switch]$NoNullRHI
+    [string]$DiagnosticsDir = "",
+    [switch]$NoNullRHI,
+    [switch]$SingleRunOnly
 )
 
 Set-StrictMode -Version Latest
@@ -34,6 +37,81 @@ function Resolve-ProjectRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 }
 
+function Resolve-EditorCmdPath {
+    param(
+        [string]$PreferredEditorCmdPath,
+        [string]$EngineRootPath
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredEditorCmdPath)) {
+        $candidate = [System.IO.Path]::GetFullPath($PreferredEditorCmdPath)
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+        throw "UnrealEditor-Cmd.exe not found at -EditorCmdPath '$candidate'."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:OMNI_UNREAL_EDITOR_CMD)) {
+        $candidate = [System.IO.Path]::GetFullPath($env:OMNI_UNREAL_EDITOR_CMD)
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+        throw "UnrealEditor-Cmd.exe not found at env:OMNI_UNREAL_EDITOR_CMD '$candidate'."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($EngineRootPath)) {
+        $candidate = Join-Path $EngineRootPath "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
+        if (Test-Path $candidate) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    $editorCmd = Get-Command "UnrealEditor-Cmd.exe" -ErrorAction SilentlyContinue
+    if ($editorCmd -and -not [string]::IsNullOrWhiteSpace($editorCmd.Source)) {
+        return [System.IO.Path]::GetFullPath($editorCmd.Source)
+    }
+
+    throw "UnrealEditor-Cmd.exe not found. Set -EditorCmdPath, -EngineRoot, or env:OMNI_UNREAL_EDITOR_CMD."
+}
+
+function Resolve-DiagnosticsDir {
+    param(
+        [string]$InputDiagnosticsDir,
+        [string]$ResolvedProjectRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($InputDiagnosticsDir)) {
+        return Join-Path $ResolvedProjectRoot "Saved\\Logs\\Automation\\forge_headless"
+    }
+
+    if ([System.IO.Path]::IsPathRooted($InputDiagnosticsDir)) {
+        return [System.IO.Path]::GetFullPath($InputDiagnosticsDir)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $ResolvedProjectRoot $InputDiagnosticsDir))
+}
+
+function Save-RunLogSnapshot {
+    param(
+        [string]$Label,
+        [string]$LogPath,
+        [string]$OutputDir
+    )
+
+    if (-not (Test-Path $LogPath)) {
+        return $null
+    }
+
+    if (-not (Test-Path $OutputDir)) {
+        [void](New-Item -Path $OutputDir -ItemType Directory -Force)
+    }
+
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $destination = Join-Path $OutputDir ("forge_{0}_{1}.log" -f $Label, $timestamp)
+    Copy-Item -Path $LogPath -Destination $destination -Force
+    return $destination
+}
+
 $resolvedProjectRoot = Resolve-ProjectRoot -InputRoot $ProjectRoot
 
 if ([string]::IsNullOrWhiteSpace($UProject)) {
@@ -46,16 +124,19 @@ if ([string]::IsNullOrWhiteSpace($UProject)) {
     $UProject = [System.IO.Path]::GetFullPath($UProject)
 }
 
-$editorCmd = Join-Path $EngineRoot "Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe"
-if (-not (Test-Path $editorCmd)) {
-    throw "UnrealEditor-Cmd.exe not found: $editorCmd"
-}
+$editorCmd = Resolve-EditorCmdPath -PreferredEditorCmdPath $EditorCmdPath -EngineRootPath $EngineRoot
 
 $artifactPath = if ([System.IO.Path]::IsPathRooted($Artifact)) {
     $Artifact
 } else {
     Join-Path $resolvedProjectRoot $Artifact
 }
+
+$diagnosticsOutputDir = Resolve-DiagnosticsDir -InputDiagnosticsDir $DiagnosticsDir -ResolvedProjectRoot $resolvedProjectRoot
+if (-not (Test-Path $diagnosticsOutputDir)) {
+    [void](New-Item -Path $diagnosticsOutputDir -ItemType Directory -Force)
+}
+
 $effectiveExecCmd = Resolve-ExecCmds -RawExecCmd $ForgeExecCmd
 
 function Read-NewLogChunk {
@@ -148,6 +229,11 @@ function Invoke-ForgeHeadlessRun {
         [void](Wait-Process -Id $process.Id -Timeout 10 -ErrorAction SilentlyContinue)
     }
 
+    $snapshotPath = Save-RunLogSnapshot -Label $Label -LogPath $logPath -OutputDir $diagnosticsOutputDir
+    if ($snapshotPath) {
+        Write-Host "Run log snapshot ($Label): $snapshotPath"
+    }
+
     if ($runStatus -eq "PASS") {
         if (-not (Test-Path $artifactPath)) {
             throw "Artifact not found after run '$Label': $artifactPath"
@@ -167,6 +253,12 @@ function Invoke-ForgeHeadlessRun {
 }
 
 try {
+    if ($SingleRunOnly) {
+        Invoke-ForgeHeadlessRun -Label "single"
+        Write-Host "SUCCESS: Forge single headless run passed."
+        exit 0
+    }
+
     Invoke-ForgeHeadlessRun -Label "first"
     $hash1 = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash
     Write-Host "Hash #1: $hash1"
