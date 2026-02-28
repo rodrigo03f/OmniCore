@@ -23,7 +23,6 @@ namespace OmniStatus
 	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName QueryGetStamina(TEXT("GetStamina"));
 	static const FName ManifestSettingStatusProfileAssetPath(TEXT("StatusProfileAssetPath"));
-	static const FName ManifestSettingStatusProfileClassPath(TEXT("StatusProfileClassPath"));
 	static const TCHAR* DefaultStatusProfileAssetPath = TEXT("/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default");
 	static const FName DebugMetricProfileStatus(TEXT("Omni.Profile.Status"));
 }
@@ -57,34 +56,16 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 	}
 
 	RuntimeSettings = FOmniStatusSettings();
-	const bool bDevDefaultsEnabled = Registry.IsValid() && Registry->IsDevDefaultsEnabled();
 	FString LoadError;
-	if (!TryLoadSettingsFromManifest(Manifest, bDevDefaultsEnabled, LoadError))
+	if (!TryLoadSettingsFromManifest(Manifest, LoadError))
 	{
-		if (!bDevDefaultsEnabled)
+		UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
+		if (DebugSubsystem.IsValid())
 		{
-			UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniStatus::CategoryName, LoadError, OmniStatus::SourceName);
-			}
-			return;
+			DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
+			DebugSubsystem->LogError(OmniStatus::CategoryName, LoadError, OmniStatus::SourceName);
 		}
-
-		if (!BuildDevFallbackSettings())
-		{
-			const FString FallbackError = LoadError.IsEmpty()
-				? TEXT("DEV defaults enabled, but Status fallback failed to resolve settings.")
-				: FString::Printf(TEXT("%s | DEV defaults fallback also failed."), *LoadError);
-			UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *FallbackError);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniStatus::CategoryName, FallbackError, OmniStatus::SourceName);
-			}
-			return;
-		}
+		return;
 	}
 
 	ExhaustedTag = RuntimeSettings.ExhaustedTag;
@@ -163,7 +144,7 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 		}
 	}
 
-	if (!bExhausted && CurrentStamina <= KINDA_SMALL_NUMBER)
+	if (!bExhausted && CurrentStamina <= RuntimeSettings.ExhaustedThreshold)
 	{
 		bExhausted = true;
 		UpdateStateTags();
@@ -363,7 +344,6 @@ void UOmniStatusSystem::AddStamina(const float Amount)
 
 bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 	const UOmniManifest* Manifest,
-	const bool bAllowDevDefaults,
 	FString& OutError
 )
 {
@@ -399,7 +379,6 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 
 	UOmniStatusProfile* LoadedProfile = nullptr;
 	bool bLoadedFromAssetPath = false;
-	bool bLoadedFromClassPath = false;
 
 	FString ProfileAssetPathValue;
 	if (!SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileAssetPath, ProfileAssetPathValue)
@@ -449,39 +428,6 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 					*ProfileAssetPath.ToString(),
 					*LoadedObject->GetClass()->GetPathName()
 				);
-			}
-		}
-	}
-
-	if (!LoadedProfile && bAllowDevDefaults)
-	{
-		FString ProfileClassPathValue;
-		if (SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileClassPath, ProfileClassPathValue))
-		{
-			const FSoftClassPath ProfileClassPath(ProfileClassPathValue);
-			if (!ProfileClassPath.IsNull())
-			{
-				UClass* LoadedClass = ProfileClassPath.TryLoadClass<UOmniStatusProfile>();
-				if (!LoadedClass || !LoadedClass->IsChildOf(UOmniStatusProfile::StaticClass()))
-				{
-					if (OutError.IsEmpty())
-					{
-						OutError = FString::Printf(
-							TEXT("Status profile class fallback invalid for SystemId '%s': %s."),
-							*RuntimeSystemId.ToString(),
-							*ProfileClassPath.ToString()
-						);
-					}
-					else
-					{
-						OutError += FString::Printf(TEXT(" Class fallback invalid: %s."), *ProfileClassPath.ToString());
-					}
-				}
-				else
-				{
-					LoadedProfile = NewObject<UOmniStatusProfile>(this, LoadedClass, NAME_None, RF_Transient);
-					bLoadedFromClassPath = true;
-				}
 			}
 		}
 	}
@@ -559,16 +505,7 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 	}
 
 	RuntimeSettings = MoveTemp(LoadedSettings);
-	if (bLoadedFromClassPath || LoadedProfile->GetClass()->IsChildOf(UOmniDevStatusProfile::StaticClass()))
-	{
-		UE_LOG(
-			LogOmniStatusSystem,
-			Warning,
-			TEXT("Status settings loaded from DEV_FALLBACK profile class: %s"),
-			*LoadedProfile->GetClass()->GetPathName()
-		);
-	}
-	else
+	if (bLoadedFromAssetPath)
 	{
 		UE_LOG(
 			LogOmniStatusSystem,
@@ -577,34 +514,16 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 			*GetNameSafe(LoadedProfile)
 		);
 	}
+	else
+	{
+		OutError = FString::Printf(
+			TEXT("Status settings for SystemId '%s' were not loaded from an asset-backed profile."),
+			*RuntimeSystemId.ToString()
+		);
+		return false;
+	}
 
 	OutError.Reset();
-	return true;
-}
-
-bool UOmniStatusSystem::BuildDevFallbackSettings()
-{
-	static bool bWarnedDevDefaultsThisSession = false;
-	if (!bWarnedDevDefaultsThisSession)
-	{
-		UE_LOG(LogOmniStatusSystem, Warning, TEXT("DEV_DEFAULTS ACTIVE: Status is using fallback settings."));
-		bWarnedDevDefaultsThisSession = true;
-	}
-
-	UOmniDevStatusProfile* DevProfile = NewObject<UOmniDevStatusProfile>(this, NAME_None, RF_Transient);
-	if (DevProfile)
-	{
-		FOmniStatusSettings LoadedSettings;
-		if (DevProfile->ResolveSettings(LoadedSettings))
-		{
-			RuntimeSettings = MoveTemp(LoadedSettings);
-			UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK profile instance."));
-			return true;
-		}
-	}
-
-	RuntimeSettings = FOmniStatusSettings();
-	UE_LOG(LogOmniStatusSystem, Warning, TEXT("Status settings loaded from DEV_FALLBACK inline C++."));
 	return true;
 }
 

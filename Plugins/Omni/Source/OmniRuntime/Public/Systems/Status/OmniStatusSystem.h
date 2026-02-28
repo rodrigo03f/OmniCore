@@ -50,8 +50,7 @@ public:
 	void AddStamina(float Amount);
 
 private:
-	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, bool bAllowDevDefaults, FString& OutError);
-	bool BuildDevFallbackSettings();
+	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, FString& OutError);
 	void UpdateStateTags();
 	void PublishTelemetry();
 
@@ -60,7 +59,7 @@ private:
 	FOmniStatusSettings RuntimeSettings;
 
 	UPROPERTY(Transient)
-	float CurrentStamina = 100.0f;
+	float CurrentStamina = 0.0f;
 
 	UPROPERTY(Transient)
 	bool bSprinting = false;

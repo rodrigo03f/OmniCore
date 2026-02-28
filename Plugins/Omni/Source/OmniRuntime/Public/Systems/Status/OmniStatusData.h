@@ -9,17 +9,20 @@ struct OMNIRUNTIME_API FOmniStatusSettings
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
 	float MaxStamina = 100.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
 	float SprintDrainPerSecond = 25.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
 	float RegenPerSecond = 18.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
 	float RegenDelaySeconds = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
+	float ExhaustedThreshold = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Omni|Status", meta = (ClampMin = "0.0"))
 	float ExhaustRecoverThreshold = 22.0f;
@@ -51,9 +54,19 @@ struct OMNIRUNTIME_API FOmniStatusSettings
 			OutError = TEXT("RegenDelaySeconds must be >= 0.");
 			return false;
 		}
+		if (ExhaustedThreshold < 0.0f || ExhaustedThreshold > MaxStamina)
+		{
+			OutError = TEXT("ExhaustedThreshold must be in range [0, MaxStamina].");
+			return false;
+		}
 		if (ExhaustRecoverThreshold < 0.0f || ExhaustRecoverThreshold > MaxStamina)
 		{
 			OutError = TEXT("ExhaustRecoverThreshold must be in range [0, MaxStamina].");
+			return false;
+		}
+		if (ExhaustRecoverThreshold < ExhaustedThreshold)
+		{
+			OutError = TEXT("ExhaustRecoverThreshold must be >= ExhaustedThreshold.");
 			return false;
 		}
 
