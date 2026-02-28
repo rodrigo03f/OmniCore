@@ -54,9 +54,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Diagnose PowerShell Environment
+        shell: powershell
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Host "=== PowerShell host diagnostics ==="
+          Write-Host "--- where pwsh ---"
+          where.exe pwsh
+          Write-Host "--- where powershell ---"
+          where.exe powershell
+          Write-Host "--- PATH ---"
+          Write-Host $env:PATH
+          Write-Host "--- Get-Command pwsh ---"
+          Get-Command pwsh -ErrorAction SilentlyContinue | Format-List *
+          Write-Host "--- Get-Command powershell ---"
+          Get-Command powershell -ErrorAction SilentlyContinue | Format-List *
+
+      - name: Resolve PowerShell Host
+        id: ps_host
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $pwsh7 = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+          if (Test-Path $pwsh7) {
+            "ps_exe=$pwsh7" >> $env:GITHUB_OUTPUT
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host: \`$pwsh7\` (preferred)"
+            exit 0
+          }
+
+          $legacy = (Get-Command powershell -ErrorAction SilentlyContinue).Source
+          if ([string]::IsNullOrWhiteSpace($legacy)) {
+            $legacy = "$env:WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          }
+          if (-not (Test-Path $legacy)) {
+            throw "No usable PowerShell executable found for omni-forge-gate."
+          }
+
+          "ps_exe=$legacy" >> $env:GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host: \`$legacy\` (fallback)"
+
       - name: Resolve Forge Environment
         id: forge_env
-        shell: pwsh
+        shell: powershell
         env:
           OMNI_ENGINE_ROOT: ${{ vars.OMNI_ENGINE_ROOT }}
           OMNI_UNREAL_EDITOR_CMD: ${{ vars.OMNI_UNREAL_EDITOR_CMD }}
@@ -108,10 +149,11 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: \`$editorCmd\`"
 
       - name: Run Forge Headless (single gate)
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          & .\Scripts\compare_omni_forge_headless.ps1 `
+          $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
+          & $psExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1 `
             -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
             -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
             -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
@@ -122,10 +164,11 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Run Forge Determinism Compare
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          & .\Scripts\compare_omni_forge_headless.ps1 `
+          $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
+          & $psExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\compare_omni_forge_headless.ps1 `
             -ProjectRoot "${{ steps.forge_env.outputs.project_root }}" `
             -UProject "${{ steps.forge_env.outputs.uproject_path }}" `
             -EditorCmdPath "${{ steps.forge_env.outputs.editor_cmd_path }}" `
@@ -136,7 +179,7 @@ jobs:
 
       - name: Forge Failure Summary
         if: failure()
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
