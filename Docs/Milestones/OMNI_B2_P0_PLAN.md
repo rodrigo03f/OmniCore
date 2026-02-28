@@ -7,6 +7,7 @@ Scope of this step:
 - CI/workflow/scripts/config only
 - No runtime code changes
 - No Forge pipeline logic changes
+- Burn-in marker PR2: docs-only validation trigger
 
 ## CI Gate Contract
 
