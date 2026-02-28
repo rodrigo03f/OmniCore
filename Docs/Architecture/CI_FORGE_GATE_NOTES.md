@@ -4,6 +4,7 @@
 - CI/workflow/scripts only
 - No runtime changes
 - No Forge runtime pipeline behavior changes
+- Burn-in marker PR1: docs-only validation trigger
 
 ## Gate jobs
 - `omni-conformance-gate`
