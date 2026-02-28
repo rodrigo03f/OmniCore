@@ -36,12 +36,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $logPath = Join-Path $env:RUNNER_TEMP "omni_conformance_gate.log"
-          $shellCommand = Get-Command pwsh -ErrorAction SilentlyContinue
-          if (-not $shellCommand) {
-            $shellCommand = Get-Command powershell -ErrorAction Stop
-          }
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
-          & $shellCommand.Source -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1 2>&1 | Tee-Object -FilePath $logPath
+          & .\Scripts\omni_conformance_gate.ps1 2>&1 | Tee-Object -FilePath $logPath
           $exitCode = $LASTEXITCODE
           if ($null -eq $exitCode) {
             $exitCode = if ($?) { 0 } else { 1 }
