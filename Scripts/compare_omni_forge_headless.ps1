@@ -113,6 +113,33 @@ function Save-RunLogSnapshot {
     return $destination
 }
 
+function Write-CompareSummary {
+    param(
+        [string]$Status,
+        [double]$DurationSeconds,
+        [string]$Hash1 = "",
+        [string]$Hash2 = "",
+        [string]$Mode = "compare",
+        [string]$ErrorMessage = ""
+    )
+
+    $summaryPath = Join-Path $diagnosticsOutputDir "forge_compare_summary.json"
+    $summary = [ordered]@{
+        status          = $Status
+        mode            = $Mode
+        durationSeconds = [Math]::Round($DurationSeconds, 3)
+        artifactPath    = $artifactPath
+        diagnosticsDir  = $diagnosticsOutputDir
+        hash1           = $Hash1
+        hash2           = $Hash2
+        errorMessage    = $ErrorMessage
+        generatedAtUtc  = (Get-Date).ToUniversalTime().ToString("o")
+    }
+
+    $json = $summary | ConvertTo-Json -Depth 4
+    Set-Content -Path $summaryPath -Value $json -Encoding UTF8
+}
+
 $resolvedProjectRoot = Resolve-ProjectRoot -InputRoot $ProjectRoot
 
 if ([string]::IsNullOrWhiteSpace($UProject)) {
@@ -256,30 +283,50 @@ function Invoke-ForgeHeadlessRun {
     throw "Forge run '$Label' timed out after $RunTimeoutSeconds seconds."
 }
 
+$overallTimer = $null
+$hash1 = ""
+$hash2 = ""
+
 try {
+    $overallTimer = [System.Diagnostics.Stopwatch]::StartNew()
+
     if ($SingleRunOnly) {
         Invoke-ForgeHeadlessRun -Label "single"
+        $overallTimer.Stop()
+        Write-CompareSummary -Status "pass" -Mode "single" -DurationSeconds $overallTimer.Elapsed.TotalSeconds
         Write-Host "SUCCESS: Forge single headless run passed."
         exit 0
     }
 
     Invoke-ForgeHeadlessRun -Label "first"
-    $hash1 = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash
+    $hash1 = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash.ToUpperInvariant()
     Write-Host "Hash #1: $hash1"
 
     Invoke-ForgeHeadlessRun -Label "second"
-    $hash2 = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash
+    $hash2 = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash.ToUpperInvariant()
     Write-Host "Hash #2: $hash2"
 
+    $overallTimer.Stop()
+
     if ($hash1 -eq $hash2) {
+        Write-CompareSummary -Status "pass" -Mode "compare" -DurationSeconds $overallTimer.Elapsed.TotalSeconds -Hash1 $hash1 -Hash2 $hash2
         Write-Host "SUCCESS: Hashes match."
         exit 0
     }
 
+    Write-CompareSummary -Status "fail" -Mode "compare" -DurationSeconds $overallTimer.Elapsed.TotalSeconds -Hash1 $hash1 -Hash2 $hash2 -ErrorMessage "Hash mismatch"
     Write-Host "FAIL: Hashes differ."
     exit 1
 }
 catch {
+    $durationSeconds = 0.0
+    if ($overallTimer) {
+        if ($overallTimer.IsRunning) {
+            $overallTimer.Stop()
+        }
+        $durationSeconds = $overallTimer.Elapsed.TotalSeconds
+    }
+    Write-CompareSummary -Status "fail" -Mode ($(if ($SingleRunOnly) { "single" } else { "compare" })) -DurationSeconds $durationSeconds -Hash1 $hash1 -Hash2 $hash2 -ErrorMessage $_.Exception.Message
     Write-Host "FAIL: $($_.Exception.Message)"
     exit 1
 }

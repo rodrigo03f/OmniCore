@@ -57,6 +57,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare Forge Workspace
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Remove-PathWithRetry {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [int]$MaxAttempts = 5
+            )
+
+            if (-not (Test-Path $Path)) {
+              return
+            }
+
+            for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+              try {
+                Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+                return
+              } catch {
+                if ($attempt -eq $MaxAttempts) {
+                  throw "Failed to remove '$Path' after $MaxAttempts attempts. Last error: $($_.Exception.Message)"
+                }
+                Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 10))
+              }
+            }
+          }
+
+          Get-Process -Name UnrealEditor-Cmd,UnrealEditor -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 2
+
+          git reset --hard HEAD
+          git clean -xfd
+
+          Remove-PathWithRetry -Path "Saved"
+          Remove-PathWithRetry -Path "Intermediate"
+          Remove-PathWithRetry -Path "DerivedDataCache"
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Workspace cleanup: completed (Saved/, Intermediate/, DerivedDataCache/)."
+
       - name: Diagnose PowerShell Environment
         continue-on-error: true
         run: |
@@ -215,6 +256,28 @@ jobs:
             -DiagnosticsDir "Saved/Logs/Automation/forge_headless" `
             -RunTimeoutSeconds 900
           exit $LASTEXITCODE
+
+      - name: Publish Forge Compare Summary
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $summaryPath = Join-Path "${{ steps.forge_env.outputs.project_root }}" "Saved\\Logs\\Automation\\forge_headless\\forge_compare_summary.json"
+          if (-not (Test-Path $summaryPath)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Forge compare summary file not found: $summaryPath"
+            exit 0
+          }
+
+          $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Forge Compare Summary"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Status: $($summary.status)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- DurationSeconds: $($summary.durationSeconds)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ArtifactPath: $($summary.artifactPath)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- DiagnosticsDir: $($summary.diagnosticsDir)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Hash1: $($summary.hash1)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Hash2: $($summary.hash2)"
 
       - name: Forge Failure Summary
         if: failure()
