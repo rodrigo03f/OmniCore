@@ -22,6 +22,12 @@ namespace OmniMovement
 	static const FName SystemId(TEXT("Movement"));
 	static const FName ActionGateSystemId(TEXT("ActionGate"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName EventOnActionStarted(TEXT("OnActionStarted"));
+	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
+	static const FName EventOnActionDenied(TEXT("OnActionDenied"));
+	static const FName EventPayloadActionId(TEXT("ActionId"));
+	static const FName EventPayloadReason(TEXT("Reason"));
+	static const FName EventPayloadEndReason(TEXT("EndReason"));
 	static const FName ManifestSettingMovementProfileAssetPath(TEXT("MovementProfileAssetPath"));
 	static const FName ManifestSettingMovementProfileClassPath(TEXT("MovementProfileClassPath"));
 	static const TCHAR* DefaultMovementProfileAssetPath = TEXT("/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default");
@@ -92,6 +98,8 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 	bIsSprinting = false;
 	NextStartAttemptWorldTime = 0.0f;
 	AutoSprintRemainingSeconds = 0.0f;
+	bObservedSprintStartedEvent = false;
+	bObservedSprintEndedEvent = false;
 	PublishTelemetry();
 	SetInitializationResult(true);
 	if (DebugSubsystem.IsValid())
@@ -105,6 +113,8 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 void UOmniMovementSystem::ShutdownSystem_Implementation()
 {
 	StopSprinting(TEXT("Shutdown"));
+	bObservedSprintStartedEvent = false;
+	bObservedSprintEndedEvent = false;
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -179,6 +189,29 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		StopSprinting(TEXT("Exhausted"));
 	}
 
+#if !UE_BUILD_SHIPPING
+	if (bObservedSprintStartedEvent && !bIsSprinting)
+	{
+		UE_LOG(
+			LogOmniMovementSystem,
+			Warning,
+			TEXT("SanityCheck: received ActionGate OnActionStarted for '%s' but Movement state ended tick with bIsSprinting=false."),
+			*RuntimeSettings.SprintActionId.ToString()
+		);
+	}
+	if (bObservedSprintEndedEvent && bIsSprinting)
+	{
+		UE_LOG(
+			LogOmniMovementSystem,
+			Warning,
+			TEXT("SanityCheck: received ActionGate OnActionEnded for '%s' but Movement state ended tick with bIsSprinting=true."),
+			*RuntimeSettings.SprintActionId.ToString()
+		);
+	}
+#endif
+
+	bObservedSprintStartedEvent = false;
+	bObservedSprintEndedEvent = false;
 	PublishTelemetry();
 }
 
@@ -192,6 +225,85 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		{
 			StopSprinting(TEXT("ExhaustedEvent"));
 		}
+		return;
+	}
+
+	if (Event.SourceSystem != OmniMovement::ActionGateSystemId)
+	{
+		return;
+	}
+
+	if (Event.EventName != OmniMovement::EventOnActionStarted
+		&& Event.EventName != OmniMovement::EventOnActionEnded
+		&& Event.EventName != OmniMovement::EventOnActionDenied)
+	{
+		return;
+	}
+
+	FString ActionIdValue;
+	if (!Event.TryGetPayloadValue(OmniMovement::EventPayloadActionId, ActionIdValue) || ActionIdValue.IsEmpty())
+	{
+		UE_LOG(
+			LogOmniMovementSystem,
+			Warning,
+			TEXT("ActionGate lifecycle event '%s' missing payload '%s'."),
+			*Event.EventName.ToString(),
+			*OmniMovement::EventPayloadActionId.ToString()
+		);
+		return;
+	}
+
+	const FName ActionId = FName(*ActionIdValue);
+	if (ActionId != RuntimeSettings.SprintActionId)
+	{
+		return;
+	}
+
+	FString ReasonValue;
+	Event.TryGetPayloadValue(OmniMovement::EventPayloadReason, ReasonValue);
+
+	if (Event.EventName == OmniMovement::EventOnActionStarted)
+	{
+		bObservedSprintStartedEvent = true;
+		UE_LOG(
+			LogOmniMovementSystem,
+			Log,
+			TEXT("ActionGateLifecycle Event=OnActionStarted ActionId=%s Requested=%s IsSprinting=%s"),
+			*ActionId.ToString(),
+			bSprintRequested ? TEXT("True") : TEXT("False"),
+			bIsSprinting ? TEXT("True") : TEXT("False")
+		);
+		return;
+	}
+
+	if (Event.EventName == OmniMovement::EventOnActionEnded)
+	{
+		bObservedSprintEndedEvent = true;
+		FString EndReasonValue;
+		Event.TryGetPayloadValue(OmniMovement::EventPayloadEndReason, EndReasonValue);
+		UE_LOG(
+			LogOmniMovementSystem,
+			Log,
+			TEXT("ActionGateLifecycle Event=OnActionEnded ActionId=%s EndReason=%s Requested=%s IsSprinting=%s"),
+			*ActionId.ToString(),
+			EndReasonValue.IsEmpty() ? TEXT("<none>") : *EndReasonValue,
+			bSprintRequested ? TEXT("True") : TEXT("False"),
+			bIsSprinting ? TEXT("True") : TEXT("False")
+		);
+		return;
+	}
+
+	if (Event.EventName == OmniMovement::EventOnActionDenied)
+	{
+		UE_LOG(
+			LogOmniMovementSystem,
+			Warning,
+			TEXT("ActionGateLifecycle Event=OnActionDenied ActionId=%s Reason=%s Requested=%s IsSprinting=%s"),
+			*ActionId.ToString(),
+			ReasonValue.IsEmpty() ? TEXT("<none>") : *ReasonValue,
+			bSprintRequested ? TEXT("True") : TEXT("False"),
+			bIsSprinting ? TEXT("True") : TEXT("False")
+		);
 	}
 }
 

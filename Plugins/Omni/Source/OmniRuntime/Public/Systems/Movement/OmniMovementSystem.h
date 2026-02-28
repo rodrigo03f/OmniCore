@@ -72,6 +72,12 @@ private:
 	float AutoSprintRemainingSeconds = 0.0f;
 
 	UPROPERTY(Transient)
+	bool bObservedSprintStartedEvent = false;
+
+	UPROPERTY(Transient)
+	bool bObservedSprintEndedEvent = false;
+
+	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;
 
 	UPROPERTY(Transient)
