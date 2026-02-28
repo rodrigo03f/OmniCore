@@ -81,7 +81,7 @@ jobs:
           $pwsh7 = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
           if (Test-Path $pwsh7) {
             "ps_exe=$pwsh7" >> $env:GITHUB_OUTPUT
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host: \`$pwsh7\` (preferred)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host (preferred): $pwsh7"
             exit 0
           }
 
@@ -94,7 +94,7 @@ jobs:
           }
 
           "ps_exe=$legacy" >> $env:GITHUB_OUTPUT
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host: \`$legacy\` (fallback)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- PowerShell host (fallback): $legacy"
 
       - name: Resolve Forge Environment
         id: forge_env
@@ -125,7 +125,7 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe was not resolved."
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Set repository variable \`OMNI_UNREAL_EDITOR_CMD\` (full exe path) or \`OMNI_ENGINE_ROOT\`."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Set repository variable OMNI_UNREAL_EDITOR_CMD (full exe path) or OMNI_ENGINE_ROOT."
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- This gate requires a Windows self-hosted runner with Unreal installed."
             throw "UnrealEditor-Cmd.exe not resolved."
           }
@@ -135,7 +135,7 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- FAILURE: UnrealEditor-Cmd.exe path does not exist."
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Path: \`$editorCmd\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Path: $editorCmd"
             throw "UnrealEditor-Cmd.exe not found at '$editorCmd'."
           }
 
@@ -145,8 +145,8 @@ jobs:
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Forge Gate"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: \`$($uproject.FullName)\`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: \`$editorCmd\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Project: $($uproject.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: $editorCmd"
 
       - name: Run Forge Headless (single gate)
         run: |
@@ -187,10 +187,10 @@ jobs:
           $diagDir = "Saved/Logs/Automation/forge_headless"
 
           if (-not (Test-Path $resolvedPath)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: \`$resolvedPath\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: $resolvedPath"
           }
           if (-not (Test-Path $reportPath)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: \`$reportPath\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: $reportPath"
           }
 
           $latestDiagLog = Get-ChildItem -Path $diagDir -Filter *.log -File -ErrorAction SilentlyContinue |
@@ -198,7 +198,7 @@ jobs:
             Select-Object -First 1
 
           if ($latestDiagLog) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Latest headless log: \`$($latestDiagLog.FullName)\`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Latest headless log: $($latestDiagLog.FullName)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Latest headless log (tail 300)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
@@ -206,7 +206,7 @@ jobs:
             Get-Content -Path $latestDiagLog.FullName -Tail 300 | Add-Content -Path $env:GITHUB_STEP_SUMMARY
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
           } else {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in \`$diagDir\`."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- No headless diagnostic log was found in $diagDir."
           }
 
       - name: Upload Forge Artifacts
