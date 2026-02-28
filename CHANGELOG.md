@@ -5,6 +5,7 @@
 - CI: add Forge determinism gate (no runtime changes).
 - Added required CI stage for headless Forge execution plus deterministic artifact compare.
 - Added CI failure diagnostics summary and Forge artifacts upload for debugging.
+- Burn-in marker PR3: docs-only validation trigger.
 
 ## [0.1.0] - 2026-02-28
 
