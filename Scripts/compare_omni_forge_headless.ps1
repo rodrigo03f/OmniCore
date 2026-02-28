@@ -11,6 +11,21 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Resolve-ExecCmds {
+    param([string]$RawExecCmd)
+
+    if ([string]::IsNullOrWhiteSpace($RawExecCmd)) {
+        throw "ForgeExecCmd must not be empty."
+    }
+
+    $normalized = $RawExecCmd.Trim().TrimEnd(';')
+    if ($normalized -notmatch "(^|;)\s*quit\s*$") {
+        $normalized = "$normalized;quit"
+    }
+
+    return $normalized
+}
+
 function Resolve-ProjectRoot {
     param([string]$InputRoot)
     if (-not [string]::IsNullOrWhiteSpace($InputRoot)) {
@@ -41,6 +56,7 @@ $artifactPath = if ([System.IO.Path]::IsPathRooted($Artifact)) {
 } else {
     Join-Path $resolvedProjectRoot $Artifact
 }
+$effectiveExecCmd = Resolve-ExecCmds -RawExecCmd $ForgeExecCmd
 
 function Read-NewLogChunk {
     param(
@@ -81,7 +97,7 @@ function Invoke-ForgeHeadlessRun {
     param([string]$Label)
 
     Write-Host "Running Forge ($Label)..."
-    $execCmdsArg = "-ExecCmds=`"$ForgeExecCmd`""
+    $execCmdsArg = "-ExecCmds=`"$effectiveExecCmd`""
     $args = @(
         $UProject,
         "-unattended",
