@@ -36,14 +36,25 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $logPath = Join-Path $env:RUNNER_TEMP "omni_conformance_gate.log"
+          $shellCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+          if (-not $shellCommand) {
+            $shellCommand = Get-Command powershell -ErrorAction Stop
+          }
 
-          & powershell -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1 *>&1 | Tee-Object -FilePath $logPath
+          & $shellCommand.Source -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Scripts\omni_conformance_gate.ps1 2>&1 | Tee-Object -FilePath $logPath
           $exitCode = $LASTEXITCODE
+          if ($null -eq $exitCode) {
+            $exitCode = if ($?) { 0 } else { 1 }
+          }
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Omni Conformance Gate"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```text"
-          Get-Content -Path $logPath | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
+          if (Test-Path $logPath) {
+            Get-Content -Path $logPath | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Conformance log file was not generated."
+          }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
 
           if ($exitCode -ne 0) {
