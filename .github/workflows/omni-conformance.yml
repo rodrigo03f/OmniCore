@@ -50,12 +50,14 @@ jobs:
       - self-hosted
       - windows
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Diagnose PowerShell Environment
-        shell: powershell
         continue-on-error: true
         run: |
           $ErrorActionPreference = "Continue"
@@ -73,7 +75,6 @@ jobs:
 
       - name: Resolve PowerShell Host
         id: ps_host
-        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -97,7 +98,6 @@ jobs:
 
       - name: Resolve Forge Environment
         id: forge_env
-        shell: powershell
         env:
           OMNI_ENGINE_ROOT: ${{ vars.OMNI_ENGINE_ROOT }}
           OMNI_UNREAL_EDITOR_CMD: ${{ vars.OMNI_UNREAL_EDITOR_CMD }}
@@ -149,7 +149,6 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- UnrealEditor-Cmd: \`$editorCmd\`"
 
       - name: Run Forge Headless (single gate)
-        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
@@ -164,7 +163,6 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Run Forge Determinism Compare
-        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           $psExe = "${{ steps.ps_host.outputs.ps_exe }}"
@@ -179,7 +177,6 @@ jobs:
 
       - name: Forge Failure Summary
         if: failure()
-        shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
