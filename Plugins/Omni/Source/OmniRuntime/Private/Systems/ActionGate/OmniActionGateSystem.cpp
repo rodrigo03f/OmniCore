@@ -96,8 +96,7 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 		UE_LOG(
 			LogOmniActionGateSystem,
 			Error,
-			TEXT("Fail-fast [SystemId=%s]: %s"),
-			*GetSystemId().ToString(),
+			TEXT("[Omni][ActionGate][Init] Fail-fast: configuracao invalida | %s"),
 			*LoadError
 		);
 		if (DebugSubsystem.IsValid())
@@ -121,11 +120,21 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 		);
 		if (bStrictValidation)
 		{
-			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *EmptyDefinitionsError);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Error,
+				TEXT("[Omni][ActionGate][Init] Definicoes vazias apos resolver profile | %s"),
+				*EmptyDefinitionsError
+			);
 		}
 		else
 		{
-			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *EmptyDefinitionsError);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Warning,
+				TEXT("[Omni][ActionGate][Init] Definicoes vazias apos resolver profile | %s"),
+				*EmptyDefinitionsError
+			);
 		}
 		if (DebugSubsystem.IsValid())
 		{
@@ -163,7 +172,7 @@ void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContex
 	UE_LOG(
 		LogOmniActionGateSystem,
 		Log,
-		TEXT("ActionGate system initialized. Definitions=%d Manifest=%s"),
+		TEXT("[Omni][ActionGate][Init] Inicializado | definitions=%d manifest=%s"),
 		DefinitionsById.Num(),
 		*GetNameSafe(Manifest)
 	);
@@ -202,7 +211,7 @@ void UOmniActionGateSystem::ShutdownSystem_Implementation()
 	DebugSubsystem.Reset();
 	Registry.Reset();
 
-	UE_LOG(LogOmniActionGateSystem, Log, TEXT("ActionGate system shutdown."));
+	UE_LOG(LogOmniActionGateSystem, Log, TEXT("[Omni][ActionGate][Shutdown] Concluido"));
 }
 
 bool UOmniActionGateSystem::IsTickEnabled_Implementation() const
@@ -345,11 +354,21 @@ TArray<FName> UOmniActionGateSystem::GetActiveActions() const
 FGameplayTagContainer UOmniActionGateSystem::GetActiveLocks() const
 {
 	FGameplayTagContainer Result;
-	for (const TPair<FGameplayTag, int32>& Pair : ActiveLockRefCounts)
-	{
-		if (Pair.Key.IsValid() && Pair.Value > 0)
+	TArray<FGameplayTag> SortedLockTags;
+	ActiveLockRefCounts.GenerateKeyArray(SortedLockTags);
+	SortedLockTags.Sort(
+		[](const FGameplayTag& Left, const FGameplayTag& Right)
 		{
-			Result.AddTag(Pair.Key);
+			return Left.GetTagName().LexicalLess(Right.GetTagName());
+		}
+	);
+
+	for (const FGameplayTag& LockTag : SortedLockTags)
+	{
+		const int32* CountPtr = ActiveLockRefCounts.Find(LockTag);
+		if (LockTag.IsValid() && CountPtr && *CountPtr > 0)
+		{
+			Result.AddTag(LockTag);
 		}
 	}
 	return Result;
@@ -527,11 +546,21 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		ValidationIssues.Add(Issue);
 		if (bStrictValidation)
 		{
-			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *Issue);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Error,
+				TEXT("[Omni][ActionGate][Validate] Falha estrutural na validacao | %s"),
+				*Issue
+			);
 		}
 		else
 		{
-			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *Issue);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Warning,
+				TEXT("[Omni][ActionGate][Validate] Issue de validacao (nao estrito) | %s"),
+				*Issue
+			);
 		}
 	};
 
@@ -658,9 +687,14 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		}
 	}
 
-	for (const TPair<FName, int32>& Pair : ActionIdCounts)
+	TArray<FName> SortedActionIds;
+	ActionIdCounts.GenerateKeyArray(SortedActionIds);
+	SortedActionIds.Sort(FNameLexicalLess());
+
+	for (const FName& ActionId : SortedActionIds)
 	{
-		if (Pair.Value <= 1)
+		const int32 Count = ActionIdCounts.FindChecked(ActionId);
+		if (Count <= 1)
 		{
 			continue;
 		}
@@ -669,8 +703,8 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 			FString::Printf(
 				TEXT("ActionProfile '%s' has duplicate ActionId '%s' (%dx). Fix duplicates in ActionLibrary '%s' and/or profile overrides."),
 				*ProfileLabel,
-				*Pair.Key.ToString(),
-				Pair.Value,
+				*ActionId.ToString(),
+				Count,
 				*LibraryPathLabel
 			)
 		);
@@ -758,7 +792,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 		UE_LOG(
 			LogOmniActionGateSystem,
 			Log,
-			TEXT("Action definitions loaded from profile: %s (Definitions=%d, StrictValidation=%s)"),
+			TEXT("[Omni][ActionGate][Config] Definitions carregadas de profile=%s | count=%d strict=%s"),
 			*ProfileLabel,
 			DefaultDefinitions.Num(),
 			bStrictValidation ? TEXT("true") : TEXT("false")
@@ -768,7 +802,7 @@ bool UOmniActionGateSystem::TryLoadDefinitionsFromManifest(
 			UE_LOG(
 				LogOmniActionGateSystem,
 				Warning,
-				TEXT("ActionProfile '%s' loaded with %d validation issue(s). Invalid entries were sanitized/denied at runtime."),
+				TEXT("[Omni][ActionGate][Config] Profile '%s' carregado com %d issue(s) | Corrija ActionLibrary para remover sanitizacao em runtime"),
 				*ProfileLabel,
 				ValidationIssues.Num()
 			);
@@ -803,7 +837,7 @@ void UOmniActionGateSystem::RebuildDefinitionMap()
 			UE_LOG(
 				LogOmniActionGateSystem,
 				Warning,
-				TEXT("ActionId duplicado em definicoes: %s (ultima definicao vence)."),
+				TEXT("[Omni][ActionGate][Config] ActionId duplicado: %s | Corrija duplicidade no ActionLibrary/profile"),
 				*Definition.ActionId.ToString()
 			);
 		}
@@ -894,15 +928,21 @@ bool UOmniActionGateSystem::EvaluateStartAction(const FName ActionId, FOmniActio
 
 		if (bStrictValidation)
 		{
-			ensureAlwaysMsgf(false, TEXT("%s"), *ActionNotFoundMessage);
-		}
-		if (bStrictValidation)
-		{
-			UE_LOG(LogOmniActionGateSystem, Error, TEXT("%s"), *ActionNotFoundMessage);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Error,
+				TEXT("[Omni][ActionGate][Evaluate] ActionId indisponivel em modo estrito | %s"),
+				*ActionNotFoundMessage
+			);
 		}
 		else
 		{
-			UE_LOG(LogOmniActionGateSystem, Warning, TEXT("%s"), *ActionNotFoundMessage);
+			UE_LOG(
+				LogOmniActionGateSystem,
+				Warning,
+				TEXT("[Omni][ActionGate][Evaluate] ActionId indisponivel (nao estrito) | %s"),
+				*ActionNotFoundMessage
+			);
 		}
 
 		Decision.bAllowed = false;

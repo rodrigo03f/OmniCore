@@ -23,6 +23,14 @@ void UOmniSystemRegistrySubsystem::Initialize(FSubsystemCollectionBase& Collecti
 {
 	Super::Initialize(Collection);
 	PublishRegistryDiagnostics(false);
+	if (IsDevDefaultsEnabled())
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][DevMode][Registry] Enabled: devdefaults=ON (omni.devdefaults=1 ou bAllowDevDefaults=True) | Not for production | May affect determinism")
+		);
+	}
 	if (UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem())
 	{
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Action"), TEXT("Pending"));
@@ -40,7 +48,11 @@ void UOmniSystemRegistrySubsystem::Initialize(FSubsystemCollectionBase& Collecti
 		return;
 	}
 
-	UE_LOG(LogOmniRegistry, Verbose, TEXT("Registry started without auto-initialization source."));
+	UE_LOG(
+		LogOmniRegistry,
+		Error,
+		TEXT("[Omni][Registry][Init] Fail-fast: manifest nao inicializado e fallback indisponivel | Configure OmniManifest em Project Settings > Omni")
+	);
 }
 
 void UOmniSystemRegistrySubsystem::Deinitialize()
@@ -90,7 +102,11 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 
 	if (!Manifest)
 	{
-		UE_LOG(LogOmniRegistry, Warning, TEXT("Cannot initialize registry: Manifest is null."));
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][Init] Manifest nulo | Configure um UOmniManifest valido em Project Settings > Omni")
+		);
 		return false;
 	}
 
@@ -111,7 +127,12 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 		const FResolvedSystemSpec* Spec = Specs.Find(SystemId);
 		if (!Spec || !Spec->SystemClass)
 		{
-			UE_LOG(LogOmniRegistry, Error, TEXT("Invalid system spec for '%s' during initialization."), *SystemId.ToString());
+			UE_LOG(
+				LogOmniRegistry,
+				Error,
+				TEXT("[Omni][Registry][Init] Spec invalido para SystemId=%s | Verifique Manifest e GetDependencies()"),
+				*SystemId.ToString()
+			);
 			ShutdownSystemsInternal(false);
 			return false;
 		}
@@ -119,7 +140,12 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 		UOmniRuntimeSystem* System = NewObject<UOmniRuntimeSystem>(this, Spec->SystemClass);
 		if (!System)
 		{
-			UE_LOG(LogOmniRegistry, Error, TEXT("Failed to instantiate system '%s'."), *SystemId.ToString());
+			UE_LOG(
+				LogOmniRegistry,
+				Error,
+				TEXT("[Omni][Registry][Init] Falha ao instanciar SystemId=%s | Verifique classe no Manifest"),
+				*SystemId.ToString()
+			);
 			ShutdownSystemsInternal(false);
 			return false;
 		}
@@ -130,7 +156,7 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 			UE_LOG(
 				LogOmniRegistry,
 				Error,
-				TEXT("Fail-fast: system '%s' failed initialization and aborted registry startup."),
+				TEXT("[Omni][Registry][Init] Fail-fast: SystemId=%s falhou na inicializacao | Corrija configuracao de profile/library no Manifest"),
 				*SystemId.ToString()
 			);
 			ShutdownSystemsInternal(false);
@@ -148,7 +174,7 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 	UE_LOG(
 		LogOmniRegistry,
 		Log,
-		TEXT("SystemRegistry initialized. Systems: %d. Manifest: %s"),
+		TEXT("[Omni][Registry][Init] Inicializado | systems=%d manifest=%s"),
 		ActiveSystems.Num(),
 		*GetNameSafe(Manifest)
 	);
@@ -203,7 +229,7 @@ bool UOmniSystemRegistrySubsystem::DispatchCommand(const FOmniCommandMessage& Co
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("DispatchCommand: invalid payload. Source=%s Target=%s Command=%s Error=%s"),
+			TEXT("[Omni][Registry][DispatchCommand] Payload invalido: source=%s target=%s command=%s error=%s | Corrija schema do command antes de enviar"),
 			*Command.SourceSystem.ToString(),
 			*Command.TargetSystem.ToString(),
 			*Command.CommandName.ToString(),
@@ -215,14 +241,19 @@ bool UOmniSystemRegistrySubsystem::DispatchCommand(const FOmniCommandMessage& Co
 	UOmniRuntimeSystem* TargetSystem = GetSystemById(Command.TargetSystem);
 	if (!TargetSystem)
 	{
-		UE_LOG(LogOmniRegistry, Warning, TEXT("DispatchCommand: target system not found: %s"), *Command.TargetSystem.ToString());
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][DispatchCommand] Target system ausente: %s | Verifique TargetSystem no command e inicializacao do Registry"),
+			*Command.TargetSystem.ToString()
+		);
 		return false;
 	}
 
 	UE_LOG(
 		LogOmniRegistry,
 		Verbose,
-		TEXT("DispatchCommand: Source=%s Target=%s Command=%s"),
+		TEXT("[Omni][Registry][DispatchCommand] source=%s target=%s command=%s"),
 		*Command.SourceSystem.ToString(),
 		*Command.TargetSystem.ToString(),
 		*Command.CommandName.ToString()
@@ -246,7 +277,7 @@ bool UOmniSystemRegistrySubsystem::ExecuteQuery(FOmniQueryMessage& Query)
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("ExecuteQuery: invalid payload. Source=%s Target=%s Query=%s Error=%s"),
+			TEXT("[Omni][Registry][ExecuteQuery] Payload invalido: source=%s target=%s query=%s error=%s | Corrija schema da query antes de enviar"),
 			*Query.SourceSystem.ToString(),
 			*Query.TargetSystem.ToString(),
 			*Query.QueryName.ToString(),
@@ -258,14 +289,19 @@ bool UOmniSystemRegistrySubsystem::ExecuteQuery(FOmniQueryMessage& Query)
 	UOmniRuntimeSystem* TargetSystem = GetSystemById(Query.TargetSystem);
 	if (!TargetSystem)
 	{
-		UE_LOG(LogOmniRegistry, Warning, TEXT("ExecuteQuery: target system not found: %s"), *Query.TargetSystem.ToString());
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][ExecuteQuery] Target system ausente: %s | Verifique TargetSystem na query e inicializacao do Registry"),
+			*Query.TargetSystem.ToString()
+		);
 		return false;
 	}
 
 	UE_LOG(
 		LogOmniRegistry,
 		Verbose,
-		TEXT("ExecuteQuery: Source=%s Target=%s Query=%s"),
+		TEXT("[Omni][Registry][ExecuteQuery] source=%s target=%s query=%s"),
 		*Query.SourceSystem.ToString(),
 		*Query.TargetSystem.ToString(),
 		*Query.QueryName.ToString()
@@ -289,7 +325,7 @@ void UOmniSystemRegistrySubsystem::BroadcastEvent(const FOmniEventMessage& Event
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("BroadcastEvent: invalid payload. Source=%s Event=%s Error=%s"),
+			TEXT("[Omni][Registry][BroadcastEvent] Payload invalido: source=%s event=%s error=%s | Corrija schema do event antes de publicar"),
 			*Event.SourceSystem.ToString(),
 			*Event.EventName.ToString(),
 			*ValidationError
@@ -300,7 +336,7 @@ void UOmniSystemRegistrySubsystem::BroadcastEvent(const FOmniEventMessage& Event
 	UE_LOG(
 		LogOmniRegistry,
 		Verbose,
-		TEXT("BroadcastEvent: Source=%s Event=%s Target=ALL(%d)"),
+		TEXT("[Omni][Registry][BroadcastEvent] source=%s event=%s target=ALL(%d)"),
 		*Event.SourceSystem.ToString(),
 		*Event.EventName.ToString(),
 		ActiveSystems.Num()
@@ -334,7 +370,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 			UE_LOG(
 				LogOmniRegistry,
 				Warning,
-				TEXT("AutoManifestAssetPath nao aponta para UOmniManifest: %s"),
+				TEXT("[Omni][Registry][AutoManifest] AssetPath invalido para UOmniManifest: %s | Corrija AutoManifestAssetPath"),
 				*AutoManifestAssetPath.ToString()
 			);
 		}
@@ -355,7 +391,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("AutoManifestClassPath nao aponta para classe UOmniManifest valida: %s"),
+			TEXT("[Omni][Registry][AutoManifest] ClassPath invalido para UOmniManifest: %s | Corrija AutoManifestClassPath"),
 			*AutoManifestClassPath.ToString()
 		);
 		return false;
@@ -367,7 +403,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("Falha ao instanciar manifest via classe: %s"),
+			TEXT("[Omni][Registry][AutoManifest] Falha ao instanciar manifest: %s | Verifique construtor/default object"),
 			*AutoManifestClassPath.ToString()
 		);
 		return false;
@@ -381,7 +417,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 			UE_LOG(
 				LogOmniRegistry,
 				Warning,
-				TEXT("DEV_DEFAULTS ACTIVE: Registry initialized with manifest class: %s"),
+				TEXT("[Omni][DevMode][Registry] Enabled: devdefaults=ON (omni.devdefaults=1 ou bAllowDevDefaults=True) | ManifestClass=%s | Not for production | May affect determinism"),
 				*AutoManifestClassPath.ToString()
 			);
 		}
@@ -390,7 +426,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 			UE_LOG(
 				LogOmniRegistry,
 				Verbose,
-				TEXT("Registry initialized via manifest class: %s"),
+				TEXT("[Omni][Registry][AutoManifest] Inicializado via classe: %s"),
 				*AutoManifestClassPath.ToString()
 			);
 		}
@@ -401,12 +437,36 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromAutoManifest()
 
 bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 {
-	if (!bUseConfiguredFallbackSystems || FallbackSystemClasses.Num() == 0)
+	if (!bUseConfiguredFallbackSystems)
 	{
 		return false;
 	}
 
-	UE_LOG(LogOmniRegistry, Warning, TEXT("Using DEV_FALLBACK system class list from config."));
+	if (!IsDevDefaultsEnabled())
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][Fallback] Configured fallback ignorado | Ative omni.devdefaults=1 apenas em debug")
+		);
+		return false;
+	}
+
+	if (FallbackSystemClasses.Num() == 0)
+	{
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][Fallback] Lista vazia de FallbackSystemClasses | Defina classes ou desative fallback")
+		);
+		return false;
+	}
+
+	UE_LOG(
+		LogOmniRegistry,
+		Warning,
+		TEXT("[Omni][DevMode][Registry] Enabled: fallback estrutural via config | Not for production | May affect determinism")
+	);
 
 	UOmniManifest* FallbackManifest = NewObject<UOmniManifest>(this, NAME_None, RF_Transient);
 	FallbackManifest->Namespace = TEXT("Omni.Fallback");
@@ -425,7 +485,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 			UE_LOG(
 				LogOmniRegistry,
 				Warning,
-				TEXT("Classe de fallback nao carregada: %s"),
+				TEXT("[Omni][Registry][Fallback] Classe nao carregada: %s | Verifique classe no config"),
 				*SystemClassPath.ToString()
 			);
 			continue;
@@ -438,7 +498,11 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 
 	if (FallbackManifest->Systems.Num() == 0)
 	{
-		UE_LOG(LogOmniRegistry, Warning, TEXT("Fallback configurado, mas nenhuma classe de system foi carregada."));
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][Fallback] Nenhuma classe de system carregada | Corrija FallbackSystemClasses")
+		);
 		return false;
 	}
 
@@ -448,7 +512,7 @@ bool UOmniSystemRegistrySubsystem::TryInitializeFromConfiguredFallback()
 		UE_LOG(
 			LogOmniRegistry,
 			Warning,
-			TEXT("Registry initialized via DEV_FALLBACK system class list (%d classes)."),
+			TEXT("[Omni][DevMode][Registry] Inicializado via DEV_FALLBACK | classes=%d | Not for production | May affect determinism"),
 			FallbackManifest->Systems.Num()
 		);
 	}
@@ -475,12 +539,22 @@ bool UOmniSystemRegistrySubsystem::BuildSpecs(const UOmniManifest* Manifest, TMa
 		UClass* LoadedClass = Entry.SystemClass.LoadSynchronous();
 		if (!LoadedClass)
 		{
-			UE_LOG(LogOmniRegistry, Warning, TEXT("Skipping enabled entry with null class in manifest '%s'."), *GetNameSafe(Manifest));
+			UE_LOG(
+				LogOmniRegistry,
+				Warning,
+				TEXT("[Omni][Registry][BuildSpecs] Entry habilitado com classe nula no manifest '%s' | Corrija SystemClass no manifest"),
+				*GetNameSafe(Manifest)
+			);
 			continue;
 		}
 		if (!LoadedClass->IsChildOf(UOmniRuntimeSystem::StaticClass()))
 		{
-			UE_LOG(LogOmniRegistry, Error, TEXT("Class '%s' is not a UOmniRuntimeSystem."), *GetNameSafe(LoadedClass));
+			UE_LOG(
+				LogOmniRegistry,
+				Error,
+				TEXT("[Omni][Registry][BuildSpecs] Classe invalida: '%s' nao herda UOmniRuntimeSystem | Ajuste SystemClass no manifest"),
+				*GetNameSafe(LoadedClass)
+			);
 			return false;
 		}
 
@@ -497,7 +571,13 @@ bool UOmniSystemRegistrySubsystem::BuildSpecs(const UOmniManifest* Manifest, TMa
 
 		if (OutSpecs.Contains(ResolvedSystemId))
 		{
-			UE_LOG(LogOmniRegistry, Error, TEXT("Duplicate SystemId '%s' in manifest '%s'."), *ResolvedSystemId.ToString(), *GetNameSafe(Manifest));
+			UE_LOG(
+				LogOmniRegistry,
+				Error,
+				TEXT("[Omni][Registry][BuildSpecs] Duplicate SystemId '%s' no manifest '%s' | Mantenha SystemId unico por system"),
+				*ResolvedSystemId.ToString(),
+				*GetNameSafe(Manifest)
+			);
 			return false;
 		}
 
@@ -516,7 +596,12 @@ bool UOmniSystemRegistrySubsystem::BuildSpecs(const UOmniManifest* Manifest, TMa
 
 	if (OutSpecs.Num() == 0)
 	{
-		UE_LOG(LogOmniRegistry, Warning, TEXT("No enabled systems found in manifest '%s'."), *GetNameSafe(Manifest));
+		UE_LOG(
+			LogOmniRegistry,
+			Warning,
+			TEXT("[Omni][Registry][BuildSpecs] Nenhum system habilitado no manifest '%s' | Habilite ao menos um system no manifesto"),
+			*GetNameSafe(Manifest)
+		);
 	}
 
 	return true;
@@ -558,7 +643,7 @@ bool UOmniSystemRegistrySubsystem::BuildInitializationOrder(
 				UE_LOG(
 					LogOmniRegistry,
 					Warning,
-					TEXT("System '%s' depends on missing system '%s'. Dependency will be ignored."),
+					TEXT("[Omni][Registry][Dependencies] Dependencia ausente: %s -> %s | Adicione em GetDependencies() ou Manifest"),
 					*SystemId.ToString(),
 					*DependencyId.ToString()
 				);
@@ -603,7 +688,11 @@ bool UOmniSystemRegistrySubsystem::BuildInitializationOrder(
 
 	if (OutInitializationOrder.Num() != Specs.Num())
 	{
-		UE_LOG(LogOmniRegistry, Error, TEXT("Cycle detected in system dependencies. Registry initialization aborted."));
+		UE_LOG(
+			LogOmniRegistry,
+			Error,
+			TEXT("[Omni][Registry][Dependencies] Ciclo detectado na inicializacao | Remova dependencia circular em GetDependencies()")
+		);
 		return false;
 	}
 
@@ -647,7 +736,7 @@ void UOmniSystemRegistrySubsystem::ShutdownSystemsInternal(const bool bLogSummar
 
 	if (bLogSummary && (ActiveSystems.Num() > 0 || bRegistryInitialized))
 	{
-		UE_LOG(LogOmniRegistry, Log, TEXT("SystemRegistry shutdown. Systems stopped: %d"), ActiveSystems.Num());
+		UE_LOG(LogOmniRegistry, Log, TEXT("[Omni][Registry][Shutdown] Concluido | systemsParados=%d"), ActiveSystems.Num());
 	}
 
 	ActiveSystems.Reset();
