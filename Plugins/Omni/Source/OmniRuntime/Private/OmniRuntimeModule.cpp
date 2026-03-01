@@ -4,6 +4,7 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameplayTagsManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
 #include "Systems/Movement/OmniMovementSystem.h"
@@ -14,6 +15,66 @@ IMPLEMENT_MODULE(FOmniRuntimeModule, OmniRuntime)
 
 namespace OmniRuntimeConsole
 {
+	namespace TagGuard
+	{
+		static const TCHAR* ReservedOmniPrefix = TEXT("Omni.");
+
+		static const TSet<FName>& GetOfficialOmniGameplayTags()
+		{
+			// Namespace Omni.* e reservado ao framework. Esta lista deve conter apenas tags oficiais.
+			static const TSet<FName> OfficialTags = {};
+			return OfficialTags;
+		}
+
+		static void ValidateReservedOmniGameplayTags()
+		{
+			FGameplayTagContainer AllTags;
+			UGameplayTagsManager::Get().RequestAllGameplayTags(AllTags, true);
+
+			const TSet<FName>& OfficialOmniTags = GetOfficialOmniGameplayTags();
+			TArray<FString> InvalidOmniTags;
+			InvalidOmniTags.Reserve(AllTags.Num());
+			int32 OmniTagsFound = 0;
+
+			for (const FGameplayTag& Tag : AllTags)
+			{
+				const FString TagString = Tag.ToString();
+				if (!TagString.StartsWith(ReservedOmniPrefix, ESearchCase::CaseSensitive))
+				{
+					continue;
+				}
+				++OmniTagsFound;
+
+				if (OfficialOmniTags.Contains(Tag.GetTagName()))
+				{
+					continue;
+				}
+
+				InvalidOmniTags.Add(TagString);
+			}
+
+			if (InvalidOmniTags.Num() == 0)
+			{
+				UE_LOG(
+					LogTemp,
+					Log,
+					TEXT("[Omni][TagGuard] Validacao de GameplayTags concluida: Omni.* encontrados=%d, violacoes=0."),
+					OmniTagsFound
+				);
+				return;
+			}
+
+			InvalidOmniTags.Sort();
+			const FString InvalidList = FString::Join(InvalidOmniTags, TEXT(", "));
+			UE_LOG(
+				LogTemp,
+				Fatal,
+				TEXT("[Omni][TagGuard] Falha de inicializacao: GameplayTag(s) Omni.* nao oficial(is): %s. O namespace Omni.* e reservado ao framework. Use Game.* ou prefixo do projeto (ex.: MeuProjeto.*)."),
+				*InvalidList
+			);
+		}
+	}
+
 	static TAutoConsoleVariable<int32> OmniDebugModeCVar(
 		TEXT("omni.debug"),
 		1,
@@ -252,6 +313,7 @@ namespace OmniRuntimeConsole
 
 void FOmniRuntimeModule::StartupModule()
 {
+	OmniRuntimeConsole::TagGuard::ValidateReservedOmniGameplayTags();
 }
 
 void FOmniRuntimeModule::ShutdownModule()
