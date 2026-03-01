@@ -1,7 +1,5 @@
 #include "Systems/OmniClockSubsystem.h"
 
-#include "Engine/World.h"
-
 void UOmniClockSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -16,16 +14,6 @@ void UOmniClockSubsystem::Deinitialize()
 void UOmniClockSubsystem::Tick(const float DeltaTime)
 {
 	TickIndex++;
-
-	if (bUseWorldTimeProvider)
-	{
-		if (const UWorld* World = GetWorld())
-		{
-			SimTimeSeconds = World->GetTimeSeconds();
-			return;
-		}
-	}
-
 	SimTimeSeconds += FMath::Max(0.0f, DeltaTime);
 }
 

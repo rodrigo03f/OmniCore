@@ -59,7 +59,12 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 	FString LoadError;
 	if (!TryLoadSettingsFromManifest(Manifest, LoadError))
 	{
-		UE_LOG(LogOmniStatusSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
+		UE_LOG(
+			LogOmniStatusSystem,
+			Error,
+			TEXT("[Omni][Status][Init] Fail-fast: configuracao invalida | %s"),
+			*LoadError
+		);
 		if (DebugSubsystem.IsValid())
 		{
 			DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
@@ -86,7 +91,7 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Loaded"));
 	}
 
-	UE_LOG(LogOmniStatusSystem, Log, TEXT("Status system initialized. Manifest=%s"), *GetNameSafe(Manifest));
+	UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Status][Init] Inicializado | manifest=%s"), *GetNameSafe(Manifest));
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -116,7 +121,7 @@ void UOmniStatusSystem::ShutdownSystem_Implementation()
 	DebugSubsystem.Reset();
 	Registry.Reset();
 
-	UE_LOG(LogOmniStatusSystem, Log, TEXT("Status system shutdown."));
+	UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Status][Shutdown] Concluido"));
 }
 
 bool UOmniStatusSystem::IsTickEnabled_Implementation() const
@@ -510,7 +515,7 @@ bool UOmniStatusSystem::TryLoadSettingsFromManifest(
 		UE_LOG(
 			LogOmniStatusSystem,
 			Log,
-			TEXT("Status settings loaded from profile: %s"),
+			TEXT("[Omni][Status][Config] Settings carregados de profile: %s"),
 			*GetNameSafe(LoadedProfile)
 		);
 	}

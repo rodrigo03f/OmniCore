@@ -107,7 +107,7 @@ private:
 	TMap<FName, FString> LiveMetrics;
 
 	UPROPERTY(EditAnywhere, Category = "Omni|Debug")
-	EOmniDebugMode DebugMode = EOmniDebugMode::Basic;
+	EOmniDebugMode DebugMode = EOmniDebugMode::Off;
 
 	UPROPERTY(EditAnywhere, Category = "Omni|Debug", meta = (ClampMin = "10", UIMin = "10"))
 	int32 MaxEntries = 200;

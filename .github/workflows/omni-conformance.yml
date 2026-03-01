@@ -287,11 +287,15 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Forge Failure Diagnostics"
 
           $resolvedPath = "Saved/Omni/ResolvedManifest.json"
+          $generatedPath = "Saved/Omni/Generated/OmniGenerated.json"
           $reportPath = "Saved/Omni/ForgeReport.md"
           $diagDir = "Saved/Logs/Automation/forge_headless"
 
           if (-not (Test-Path $resolvedPath)) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing artifact: $resolvedPath"
+          }
+          if (-not (Test-Path $generatedPath)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing generated output: $generatedPath"
           }
           if (-not (Test-Path $reportPath)) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Missing report: $reportPath"
@@ -325,3 +329,4 @@ jobs:
             Saved/Logs/Automation/**
             Saved/Omni/ForgeReport.md
             Saved/Omni/ResolvedManifest.json
+            Saved/Omni/Generated/OmniGenerated.json

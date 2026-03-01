@@ -10,6 +10,24 @@ class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
 class UOmniClockSubsystem;
 
+// Purpose:
+// - Orquestrar estado de sprint no runtime usando dados de profile.
+// - Integrar com Status e ActionGate por mensagens no registry.
+// - Expor controle de sprint para gameplay/console.
+// Inputs:
+// - Config de movimento (Manifest -> MovementProfile).
+// - Requisicoes de sprint (API/eventos).
+// - Tempo simulado via OmniClock e respostas de status/action gate.
+// Outputs:
+// - Commands/Queries para systems dependentes.
+// - Estado local de sprint (requested/active/auto sprint).
+// - Telemetria de debug.
+// Determinism:
+// - Fluxo normal usa OmniClock como fonte unica de tempo.
+// - Nao depende de WorldTime no caminho normal.
+// Failure modes:
+// - Sem profile valido ou sem OmniClock => fail-fast na inicializacao.
+// - Sprint negado por regras de status/action gate gera motivo explicito.
 UCLASS()
 class OMNIRUNTIME_API UOmniMovementSystem : public UOmniRuntimeSystem
 {
@@ -44,7 +62,6 @@ public:
 
 private:
 	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, bool bAllowDevDefaults, FString& OutError);
-	bool BuildDevFallbackSettings();
 	void StartSprinting();
 	void StopSprinting(FName Reason);
 	void PublishTelemetry() const;

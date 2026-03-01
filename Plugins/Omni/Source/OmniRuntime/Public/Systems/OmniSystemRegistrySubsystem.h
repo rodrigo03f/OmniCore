@@ -11,6 +11,25 @@ class UOmniManifest;
 class UOmniRuntimeSystem;
 class UOmniDebugSubsystem;
 
+// Purpose:
+// - Bootstrapar o runtime Omni a partir de UOmniManifest (asset/class configurado).
+// - Resolver dependencias declaradas entre systems e inicializar na ordem correta.
+// - Rotear Commands/Queries/Events entre systems sem acoplamento direto.
+// Inputs:
+// - Config de projeto (AutoManifest, flags DEV/fallback).
+// - Definicoes de systems/dependencias no Manifest.
+// - Mensagens de runtime (Command/Query/Event).
+// Outputs:
+// - Systems ativos registrados por SystemId.
+// - Estado do registry (inicializado/nao inicializado) e manifest ativo.
+// - Roteamento de mensagens para o system de destino.
+// Determinism:
+// - Ordem de inicializacao derivada de dependencias + ordenacao lexical de fila.
+// - GetActiveSystemIds retorna ids ordenados.
+// Failure modes:
+// - Manifest invalido/ausente no fluxo normal => fail-fast com log acionavel.
+// - Dependencia circular ou SystemId duplicado => aborta inicializacao.
+// - Fallback estrutural so via opt-in DEV explicito.
 UCLASS(Config = Game)
 class OMNIRUNTIME_API UOmniSystemRegistrySubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
@@ -82,7 +101,7 @@ private:
 	FSoftClassPath AutoManifestClassPath;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry")
-	bool bUseConfiguredFallbackSystems = true;
+	bool bUseConfiguredFallbackSystems = false;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Omni|Registry|Dev")
 	bool bAllowDevDefaults = false;

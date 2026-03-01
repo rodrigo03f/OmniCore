@@ -27,9 +27,12 @@ namespace OmniForge
 	static constexpr int32 ForgeVersion = 1;
 	static constexpr TCHAR DefaultRoot[] = TEXT("/Game/Data");
 	static constexpr TCHAR SavedFolder[] = TEXT("Omni");
+	static constexpr TCHAR GeneratedFolder[] = TEXT("Generated");
 	static constexpr TCHAR ResolvedManifestFile[] = TEXT("ResolvedManifest.json");
+	static constexpr TCHAR GeneratedFile[] = TEXT("OmniGenerated.json");
 	static constexpr TCHAR ReportFile[] = TEXT("ForgeReport.md");
 	static constexpr TCHAR DisplayResolvedManifestPath[] = TEXT("Saved/Omni/ResolvedManifest.json");
+	static constexpr TCHAR DisplayGeneratedPath[] = TEXT("Saved/Omni/Generated/OmniGenerated.json");
 	static constexpr TCHAR DisplayReportPath[] = TEXT("Saved/Omni/ForgeReport.md");
 	static constexpr TCHAR DisallowedActionPrefix[] = TEXT("Input.");
 
@@ -112,6 +115,93 @@ namespace OmniForge
 		FString Value = InName.ToString();
 		Value.TrimStartAndEndInline();
 		return Value.IsEmpty() ? NAME_None : FName(*Value);
+	}
+
+	static bool IsValidNamespace(const FString& RawNamespace, FString& OutReason)
+	{
+		OutReason.Reset();
+
+		const FString Namespace = RawNamespace.TrimStartAndEnd();
+		if (Namespace.IsEmpty())
+		{
+			OutReason = TEXT("Namespace is empty.");
+			return false;
+		}
+
+		if (Namespace.StartsWith(TEXT(".")) || Namespace.EndsWith(TEXT(".")) || Namespace.Contains(TEXT("..")))
+		{
+			OutReason = TEXT("Namespace cannot start/end with '.' or contain empty segments.");
+			return false;
+		}
+
+		TArray<FString> Segments;
+		Namespace.ParseIntoArray(Segments, TEXT("."), true);
+		if (Segments.Num() == 0)
+		{
+			OutReason = TEXT("Namespace must contain at least one segment.");
+			return false;
+		}
+
+		for (const FString& Segment : Segments)
+		{
+			if (Segment.IsEmpty())
+			{
+				OutReason = TEXT("Namespace has an empty segment.");
+				return false;
+			}
+
+			if (FChar::IsDigit(Segment[0]))
+			{
+				OutReason = FString::Printf(TEXT("Namespace segment '%s' cannot start with a digit."), *Segment);
+				return false;
+			}
+
+			for (const TCHAR Character : Segment)
+			{
+				const bool bValidCharacter = FChar::IsAlnum(Character) || Character == TEXT('_');
+				if (!bValidCharacter)
+				{
+					OutReason = FString::Printf(
+						TEXT("Namespace segment '%s' has invalid character '%c'."),
+						*Segment,
+						Character
+					);
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	static FString BuildShortIssueCode(const FString& Code)
+	{
+		static const FString Prefix = TEXT("OMNI_FORGE_");
+		if (!Code.StartsWith(Prefix))
+		{
+			return Code;
+		}
+
+		const FString Remainder = Code.RightChop(Prefix.Len());
+		FString ShortCode;
+		if (Remainder.Split(TEXT("_"), &ShortCode, nullptr))
+		{
+			return ShortCode;
+		}
+		return Remainder;
+	}
+
+	static bool IsValidationIssue(const FOmniForgeError& Issue)
+	{
+		return Issue.Code == TEXT("OMNI_FORGE_E001_DUPLICATE_SYSTEMID")
+			|| Issue.Code == TEXT("OMNI_FORGE_E003_MISSING_SYSTEMID")
+			|| Issue.Code == TEXT("OMNI_FORGE_E005_MISSING_DEPENDENCY")
+			|| Issue.Code == TEXT("OMNI_FORGE_E006_DEPENDENCY_CYCLE")
+			|| Issue.Code == TEXT("OMNI_FORGE_E021_INVALID_SYSTEMID")
+			|| Issue.Code == TEXT("OMNI_FORGE_E022_MISSING_SYSTEMCLASS")
+			|| Issue.Code == TEXT("OMNI_FORGE_E023_SELF_DEPENDENCY")
+			|| Issue.Code == TEXT("OMNI_FORGE_E024_INVALID_NAMESPACE")
+			|| Issue.Code == TEXT("OMNI_FORGE_E030_EMPTY_MANIFEST");
 	}
 
 	static FString BuildManifestSource(const FOmniForgeInput& Input)
@@ -914,6 +1004,20 @@ namespace OmniForge
 	{
 		OutInitializationOrder.Reset();
 
+		{
+			FString NamespaceIssue;
+			if (!IsValidNamespace(Normalized.Namespace, NamespaceIssue))
+			{
+				Report.AddError(
+					TEXT("OMNI_FORGE_E024_INVALID_NAMESPACE"),
+					FString::Printf(TEXT("Invalid namespace '%s'. %s"), *Normalized.Namespace, *NamespaceIssue),
+					TEXT("Manifest.Namespace"),
+					TEXT("Use dot-separated identifiers (example: Omni.Official or Game.Core).")
+				);
+				return false;
+			}
+		}
+
 		if (Normalized.Systems.Num() == 0)
 		{
 			Report.AddError(
@@ -1285,6 +1389,49 @@ namespace OmniForge
 		return Writer->Close();
 	}
 
+	static bool BuildGeneratedJsonString(
+		const FOmniForgeResolved& Resolved,
+		const bool bGenerated,
+		const FString& Reason,
+		FString& OutJson
+	)
+	{
+		OutJson.Reset();
+		const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutJson);
+
+		Writer->WriteObjectStart();
+		Writer->WriteValue(TEXT("generated"), bGenerated);
+		if (Reason.IsEmpty())
+		{
+			Writer->WriteNull(TEXT("reason"));
+		}
+		else
+		{
+			Writer->WriteValue(TEXT("reason"), Reason);
+		}
+		Writer->WriteValue(TEXT("namespace"), Resolved.Namespace);
+		Writer->WriteValue(TEXT("buildVersion"), Resolved.BuildVersion);
+
+		Writer->WriteArrayStart(TEXT("systems"));
+		for (const FOmniForgeResolvedSystem& System : Resolved.Systems)
+		{
+			Writer->WriteObjectStart();
+			Writer->WriteValue(TEXT("id"), System.SystemId.ToString());
+			Writer->WriteValue(TEXT("class"), System.SystemClassPath);
+			Writer->WriteArrayStart(TEXT("deps"));
+			for (const FName Dependency : System.Dependencies)
+			{
+				Writer->WriteValue(Dependency.ToString());
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteObjectEnd();
+		}
+		Writer->WriteArrayEnd();
+
+		Writer->WriteObjectEnd();
+		return Writer->Close();
+	}
+
 	static FString BuildReportMarkdown(const FOmniForgeReport& Report)
 	{
 		TArray<FString> Lines;
@@ -1309,6 +1456,33 @@ namespace OmniForge
 		Lines.Add(FString::Printf(TEXT("- actionsCount: %d"), Report.ActionCount));
 		Lines.Add(TEXT(""));
 
+		TArray<FString> ValidationErrorLines;
+		for (const FOmniForgeError& Issue : Report.Errors)
+		{
+			if (Issue.Severity != EOmniForgeErrorSeverity::Error || !IsValidationIssue(Issue))
+			{
+				continue;
+			}
+
+			ValidationErrorLines.Add(
+				FString::Printf(
+					TEXT("- [%s] %s (%s)"),
+					*BuildShortIssueCode(Issue.Code),
+					*Issue.Message,
+					*Issue.Location
+				)
+			);
+		}
+		ValidationErrorLines.Sort();
+
+		if (ValidationErrorLines.Num() > 0)
+		{
+			Lines.Add(TEXT("## Validation Errors"));
+			Lines.Add(TEXT(""));
+			Lines.Append(ValidationErrorLines);
+			Lines.Add(TEXT(""));
+		}
+
 		if (Report.Errors.Num() > 0)
 		{
 			Lines.Add(TEXT("## Issues"));
@@ -1332,6 +1506,7 @@ namespace OmniForge
 		Lines.Add(TEXT("## Outputs"));
 		Lines.Add(TEXT(""));
 		Lines.Add(FString::Printf(TEXT("- ResolvedManifest: `%s`"), DisplayResolvedManifestPath));
+		Lines.Add(FString::Printf(TEXT("- Generated: `%s`"), DisplayGeneratedPath));
 		Lines.Add(FString::Printf(TEXT("- Report: `%s`"), DisplayReportPath));
 		Lines.Add(TEXT(""));
 
@@ -1432,38 +1607,73 @@ static bool PhaseGenerate(FForgeContext& Context)
 {
 	Context.SavedOmniDir = FPaths::Combine(FPaths::ProjectSavedDir(), OmniForge::SavedFolder);
 	IFileManager::Get().MakeDirectory(*Context.SavedOmniDir, true);
+	const FString GeneratedDir = FPaths::Combine(Context.SavedOmniDir, OmniForge::GeneratedFolder);
+	IFileManager::Get().MakeDirectory(*GeneratedDir, true);
+
 	Context.Report.OutputReportPath = FPaths::Combine(Context.SavedOmniDir, OmniForge::ReportFile);
 	Context.Report.OutputResolvedManifestPath = FPaths::Combine(Context.SavedOmniDir, OmniForge::ResolvedManifestFile);
+	Context.Report.OutputGeneratedPath = FPaths::Combine(GeneratedDir, OmniForge::GeneratedFile);
 	Context.ResolvedManifestOutputFile = Context.Report.OutputResolvedManifestPath;
 
-	if (!Context.Report.HasErrors())
+	const bool bPipelineDataReady = !Context.Report.HasErrors();
+	FOmniForgeResolved ResolvedForOutput = Context.Resolved;
+	if (!bPipelineDataReady)
 	{
-		FString JsonOutput;
-		{
-			if (!OmniForge::BuildResolvedJsonString(Context.Resolved, JsonOutput))
-			{
-				Context.Report.AddError(
-					TEXT("OMNI_FORGE_E099_INTERNAL"),
-					TEXT("Failed to serialize ResolvedManifest JSON."),
-					TEXT("Generate"),
-					TEXT("Inspect resolved manifest structure for unsupported fields.")
-				);
-			}
-		}
+		ResolvedForOutput = FOmniForgeResolved();
+		ResolvedForOutput.ForgeVersion = OmniForge::ForgeVersion;
+		ResolvedForOutput.InputHash = Context.Report.InputHash;
+		ResolvedForOutput.GenerationRoot = !Context.Normalized.GenerationRoot.IsEmpty()
+			? Context.Normalized.GenerationRoot
+			: Context.EffectiveInput.GenerationRoot;
+		ResolvedForOutput.Namespace = Context.Normalized.Namespace;
+		ResolvedForOutput.BuildVersion = Context.Normalized.BuildVersion;
+	}
 
-		if (!Context.Report.HasErrors())
-		{
-			FString WriteError;
-			if (!OmniForge::SaveTextFile(Context.Report.OutputResolvedManifestPath, JsonOutput, WriteError))
-			{
-				Context.Report.AddError(
-					TEXT("OMNI_FORGE_E099_INTERNAL"),
-					WriteError,
-					TEXT("Generate"),
-					TEXT("Ensure Saved/Omni is writable.")
-				);
-			}
-		}
+	FString JsonOutput;
+	if (!OmniForge::BuildResolvedJsonString(ResolvedForOutput, JsonOutput))
+	{
+		Context.Report.AddError(
+			TEXT("OMNI_FORGE_E099_INTERNAL"),
+			TEXT("Failed to serialize ResolvedManifest JSON."),
+			TEXT("Generate"),
+			TEXT("Inspect resolved manifest structure for unsupported fields.")
+		);
+		JsonOutput = TEXT("{\"forgeVersion\":1,\"inputHash\":\"\",\"systemsCount\":0,\"actionsCount\":0,\"generatedAt\":null,\"schema\":\"omni.forge.resolved_manifest.v1\",\"generationRoot\":\"/Game/Data\",\"namespace\":\"Omni\",\"buildVersion\":0,\"systems\":[],\"initializationOrder\":[],\"profiles\":[],\"actionDefinitions\":[]}\n");
+	}
+
+	FString WriteError;
+	if (!OmniForge::SaveTextFile(Context.Report.OutputResolvedManifestPath, JsonOutput, WriteError))
+	{
+		Context.Report.AddError(
+			TEXT("OMNI_FORGE_E099_INTERNAL"),
+			WriteError,
+			TEXT("Generate"),
+			TEXT("Ensure Saved/Omni is writable.")
+		);
+	}
+
+	FString GeneratedJson;
+	const FString GeneratedReason = bPipelineDataReady ? FString() : TEXT("Validation or resolve failed.");
+	if (!OmniForge::BuildGeneratedJsonString(ResolvedForOutput, bPipelineDataReady, GeneratedReason, GeneratedJson))
+	{
+		Context.Report.AddError(
+			TEXT("OMNI_FORGE_E099_INTERNAL"),
+			TEXT("Failed to serialize generated output JSON."),
+			TEXT("Generate"),
+			TEXT("Inspect generated output serialization.")
+		);
+		GeneratedJson = TEXT("{\"generated\":false,\"reason\":\"Validation or resolve failed.\",\"namespace\":\"Omni\",\"buildVersion\":0,\"systems\":[]}\n");
+	}
+
+	WriteError.Reset();
+	if (!OmniForge::SaveTextFile(Context.Report.OutputGeneratedPath, GeneratedJson, WriteError))
+	{
+		Context.Report.AddError(
+			TEXT("OMNI_FORGE_E099_INTERNAL"),
+			WriteError,
+			TEXT("Generate"),
+			TEXT("Ensure Saved/Omni/Generated is writable.")
+		);
 	}
 
 	return !Context.Report.HasErrors();
@@ -1472,11 +1682,6 @@ static bool PhaseGenerate(FForgeContext& Context)
 static void PhaseReport(FForgeContext& Context)
 {
 	Context.Report.bPassed = !Context.Report.HasErrors();
-	if (!Context.Report.bPassed)
-	{
-		IFileManager::Get().Delete(*Context.ResolvedManifestOutputFile, false, true, true);
-		Context.Report.OutputResolvedManifestPath = TEXT("(not generated)");
-	}
 
 	Context.Report.Summary = Context.Report.bPassed
 		? FString::Printf(
@@ -1504,10 +1709,11 @@ static void PhaseReport(FForgeContext& Context)
 		UE_LOG(
 			LogOmniForge,
 			Log,
-			TEXT("Forge PASS. Systems=%d Actions=%d Resolved=%s Report=%s"),
+			TEXT("Forge PASS. Systems=%d Actions=%d Resolved=%s Generated=%s Report=%s"),
 			Context.Report.SystemCount,
 			Context.Report.ActionCount,
 			*Context.Report.OutputResolvedManifestPath,
+			*Context.Report.OutputGeneratedPath,
 			*Context.Report.OutputReportPath
 		);
 	}
@@ -1616,8 +1822,9 @@ FOmniForgeResult UOmniForgeRunner::Run(const FOmniForgeInput& Input)
 	FOmniForgeResult Result;
 	Result.Report = RunInternal(Input, &Result.Resolved);
 	Result.bSuccess = Result.Report.bPassed;
-	Result.bHasResolvedManifest = Result.Report.bPassed;
-	if (!Result.bHasResolvedManifest)
+	Result.bHasResolvedManifest = !Result.Report.OutputResolvedManifestPath.IsEmpty()
+		&& IFileManager::Get().FileExists(*Result.Report.OutputResolvedManifestPath);
+	if (!Result.bSuccess)
 	{
 		Result.Resolved = FOmniForgeResolved();
 	}

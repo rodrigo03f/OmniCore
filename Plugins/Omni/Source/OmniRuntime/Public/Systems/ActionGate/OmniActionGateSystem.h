@@ -10,6 +10,24 @@ class UOmniManifest;
 class UOmniSystemRegistrySubsystem;
 class UOmniDebugSubsystem;
 
+// Purpose:
+// - Aplicar regras de acao (allow/deny) com base em definicoes data-driven.
+// - Controlar locks de gameplay tags por acao ativa.
+// - Publicar eventos de ciclo de vida de acao (start/end/deny).
+// Inputs:
+// - Manifest/profile/library com definicoes de acao.
+// - Commands/Queries/Events recebidos via registry.
+// - Estado atual de acoes ativas e locks.
+// Outputs:
+// - Decisao da acao (FOmniActionGateDecision).
+// - Conjunto de acoes ativas e tags de lock ativas.
+// - Eventos para outros systems interessados.
+// Determinism:
+// - Listas publicas retornadas de forma ordenada (acoes e locks).
+// - Emissao de erros de validacao com ordem estavel por ActionId.
+// Failure modes:
+// - Dados invalidos no profile/library podem causar fail-fast (modo estrito).
+// - ActionId inexistente ou desabilitado retorna deny explicito.
 UCLASS()
 class OMNIRUNTIME_API UOmniActionGateSystem : public UOmniRuntimeSystem
 {

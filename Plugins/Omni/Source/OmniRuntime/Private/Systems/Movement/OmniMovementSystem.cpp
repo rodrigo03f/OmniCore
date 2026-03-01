@@ -11,12 +11,20 @@
 #include "Systems/OmniClockSubsystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
+#include "HAL/IConsoleManager.h"
 #include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniMovementSystem, Log, All);
 
 namespace OmniMovement
 {
+	static TAutoConsoleVariable<int32> CVarOmniMovementDevFallback(
+		TEXT("omni.movement.devfallback"),
+		0,
+		TEXT("Enable explicit DEV fallback for movement profile class path.\n0 = OFF (fail-fast)\n1 = ON (fallback allowed when omni.devdefaults is ON)."),
+		ECVF_Default
+	);
+
 	static const FName CategoryName(TEXT("Movement"));
 	static const FName SourceName(TEXT("MovementSystem"));
 	static const FName SystemId(TEXT("Movement"));
@@ -62,36 +70,45 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 	{
 		DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Pending"));
 	}
+	if (!ClockSubsystem.IsValid())
+	{
+		const FString ClockError = TEXT("[Omni][Movement][Init] OmniClock obrigatorio nao encontrado | Garanta UOmniClockSubsystem ativo no GameInstance");
+		UE_LOG(LogOmniMovementSystem, Error, TEXT("%s"), *ClockError);
+		if (DebugSubsystem.IsValid())
+		{
+			DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
+			DebugSubsystem->LogError(OmniMovement::CategoryName, ClockError, OmniMovement::SourceName);
+		}
+		return;
+	}
 
 	RuntimeSettings = FOmniMovementSettings();
 	const bool bDevDefaultsEnabled = Registry.IsValid() && Registry->IsDevDefaultsEnabled();
-	FString LoadError;
-	if (!TryLoadSettingsFromManifest(Manifest, bDevDefaultsEnabled, LoadError))
+	const bool bMovementDevFallbackEnabled = bDevDefaultsEnabled && OmniMovement::CVarOmniMovementDevFallback.GetValueOnGameThread() > 0;
+	if (bMovementDevFallbackEnabled)
 	{
-		if (!bDevDefaultsEnabled)
-		{
-			UE_LOG(LogOmniMovementSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *LoadError);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniMovement::CategoryName, LoadError, OmniMovement::SourceName);
-			}
-			return;
-		}
+		UE_LOG(
+			LogOmniMovementSystem,
+			Warning,
+			TEXT("[Omni][DevMode][Movement] Enabled: omni.movement.devfallback=1 | Not for production | May affect determinism")
+		);
+	}
 
-		if (!BuildDevFallbackSettings())
+	FString LoadError;
+	if (!TryLoadSettingsFromManifest(Manifest, bMovementDevFallbackEnabled, LoadError))
+	{
+		UE_LOG(
+			LogOmniMovementSystem,
+			Error,
+			TEXT("[Omni][Movement][Init] Fail-fast: configuracao invalida | %s"),
+			*LoadError
+		);
+		if (DebugSubsystem.IsValid())
 		{
-			const FString FallbackError = LoadError.IsEmpty()
-				? TEXT("DEV defaults enabled, but Movement fallback failed to resolve settings.")
-				: FString::Printf(TEXT("%s | DEV defaults fallback also failed."), *LoadError);
-			UE_LOG(LogOmniMovementSystem, Error, TEXT("Fail-fast [SystemId=%s]: %s"), *GetSystemId().ToString(), *FallbackError);
-			if (DebugSubsystem.IsValid())
-			{
-				DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
-				DebugSubsystem->LogError(OmniMovement::CategoryName, FallbackError, OmniMovement::SourceName);
-			}
-			return;
+			DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Failed"));
+			DebugSubsystem->LogError(OmniMovement::CategoryName, LoadError, OmniMovement::SourceName);
 		}
+		return;
 	}
 
 	bSprintRequested = false;
@@ -107,7 +124,7 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 		DebugSubsystem->SetMetric(OmniMovement::DebugMetricProfileMovement, TEXT("Loaded"));
 	}
 
-	UE_LOG(LogOmniMovementSystem, Log, TEXT("Movement system initialized. Manifest=%s"), *GetNameSafe(Manifest));
+	UE_LOG(LogOmniMovementSystem, Log, TEXT("[Omni][Movement][Init] Inicializado | manifest=%s"), *GetNameSafe(Manifest));
 }
 
 void UOmniMovementSystem::ShutdownSystem_Implementation()
@@ -129,7 +146,7 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 	ClockSubsystem.Reset();
 	Registry.Reset();
 
-	UE_LOG(LogOmniMovementSystem, Log, TEXT("Movement system shutdown."));
+	UE_LOG(LogOmniMovementSystem, Log, TEXT("[Omni][Movement][Shutdown] Concluido"));
 }
 
 bool UOmniMovementSystem::IsTickEnabled_Implementation() const
@@ -195,7 +212,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("SanityCheck: received ActionGate OnActionStarted for '%s' but Movement state ended tick with bIsSprinting=false."),
+			TEXT("[Omni][Movement][Sanity] Evento OnActionStarted inconsistente para '%s' | Verifique fluxo de eventos ActionGate"),
 			*RuntimeSettings.SprintActionId.ToString()
 		);
 	}
@@ -204,7 +221,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("SanityCheck: received ActionGate OnActionEnded for '%s' but Movement state ended tick with bIsSprinting=true."),
+			TEXT("[Omni][Movement][Sanity] Evento OnActionEnded inconsistente para '%s' | Verifique fluxo de eventos ActionGate"),
 			*RuntimeSettings.SprintActionId.ToString()
 		);
 	}
@@ -246,7 +263,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("ActionGate lifecycle event '%s' missing payload '%s'."),
+			TEXT("[Omni][Movement][Events] Payload ausente em '%s': '%s' | Verifique schema de evento do ActionGate"),
 			*Event.EventName.ToString(),
 			*OmniMovement::EventPayloadActionId.ToString()
 		);
@@ -268,7 +285,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		UE_LOG(
 			LogOmniMovementSystem,
 			Log,
-			TEXT("ActionGateLifecycle Event=OnActionStarted ActionId=%s Requested=%s IsSprinting=%s"),
+			TEXT("[Omni][Movement][Events] OnActionStarted | actionId=%s requested=%s sprinting=%s"),
 			*ActionId.ToString(),
 			bSprintRequested ? TEXT("True") : TEXT("False"),
 			bIsSprinting ? TEXT("True") : TEXT("False")
@@ -284,7 +301,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		UE_LOG(
 			LogOmniMovementSystem,
 			Log,
-			TEXT("ActionGateLifecycle Event=OnActionEnded ActionId=%s EndReason=%s Requested=%s IsSprinting=%s"),
+			TEXT("[Omni][Movement][Events] OnActionEnded | actionId=%s endReason=%s requested=%s sprinting=%s"),
 			*ActionId.ToString(),
 			EndReasonValue.IsEmpty() ? TEXT("<none>") : *EndReasonValue,
 			bSprintRequested ? TEXT("True") : TEXT("False"),
@@ -298,7 +315,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("ActionGateLifecycle Event=OnActionDenied ActionId=%s Reason=%s Requested=%s IsSprinting=%s"),
+			TEXT("[Omni][Movement][Events] OnActionDenied | actionId=%s reason=%s requested=%s sprinting=%s"),
 			*ActionId.ToString(),
 			ReasonValue.IsEmpty() ? TEXT("<none>") : *ReasonValue,
 			bSprintRequested ? TEXT("True") : TEXT("False"),
@@ -615,7 +632,7 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("Movement settings loaded from DEV_FALLBACK profile class: %s"),
+			TEXT("[Omni][DevMode][Movement] Profile carregado via DEV_FALLBACK: %s | Not for production | May affect determinism"),
 			*LoadedProfile->GetClass()->GetPathName()
 		);
 	}
@@ -624,7 +641,7 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(
 		UE_LOG(
 			LogOmniMovementSystem,
 			Log,
-			TEXT("Movement settings loaded from profile: %s"),
+			TEXT("[Omni][Movement][Config] Settings carregados de profile: %s"),
 			*GetNameSafe(LoadedProfile)
 		);
 	}
@@ -633,43 +650,9 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(
 	return true;
 }
 
-bool UOmniMovementSystem::BuildDevFallbackSettings()
-{
-	static bool bWarnedDevDefaultsThisSession = false;
-	if (!bWarnedDevDefaultsThisSession)
-	{
-		UE_LOG(LogOmniMovementSystem, Warning, TEXT("DEV_DEFAULTS ACTIVE: Movement is using fallback settings."));
-		bWarnedDevDefaultsThisSession = true;
-	}
-
-	UOmniDevMovementProfile* DevProfile = NewObject<UOmniDevMovementProfile>(this, NAME_None, RF_Transient);
-	if (DevProfile)
-	{
-		FOmniMovementSettings LoadedSettings;
-		if (DevProfile->ResolveSettings(LoadedSettings))
-		{
-			RuntimeSettings = MoveTemp(LoadedSettings);
-			UE_LOG(LogOmniMovementSystem, Warning, TEXT("Movement settings loaded from DEV_FALLBACK profile instance."));
-			return true;
-		}
-	}
-
-	RuntimeSettings = FOmniMovementSettings();
-	UE_LOG(LogOmniMovementSystem, Warning, TEXT("Movement settings loaded from DEV_FALLBACK inline C++."));
-	return true;
-}
-
 double UOmniMovementSystem::GetNowSeconds() const
 {
-	if (ClockSubsystem.IsValid())
-	{
-		return ClockSubsystem->GetSimTime();
-	}
-	if (Registry.IsValid() && Registry->GetWorld())
-	{
-		return Registry->GetWorld()->GetTimeSeconds();
-	}
-	return 0.0;
+	return ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : 0.0;
 }
 
 bool UOmniMovementSystem::QueryStatusIsExhausted() const

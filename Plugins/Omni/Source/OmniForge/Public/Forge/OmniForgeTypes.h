@@ -99,6 +99,7 @@ struct FOmniForgeReport
 	FString Summary;
 	FString ManifestSource;
 	FString OutputResolvedManifestPath;
+	FString OutputGeneratedPath;
 	FString OutputReportPath;
 	int32 ErrorCount = 0;
 	int32 WarningCount = 0;

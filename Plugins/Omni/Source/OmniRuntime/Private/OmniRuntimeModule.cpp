@@ -12,11 +12,25 @@
 #include "Systems/Status/OmniStatusSystem.h"
 
 IMPLEMENT_MODULE(FOmniRuntimeModule, OmniRuntime)
+DEFINE_LOG_CATEGORY_STATIC(LogOmniRuntime, Log, All);
+DEFINE_LOG_CATEGORY_STATIC(LogOmniTagGuard, Log, All);
 
 namespace OmniRuntimeConsole
 {
 	namespace TagGuard
 	{
+		// Purpose:
+		// - Proteger o namespace reservado Omni.* no startup do runtime.
+		// Inputs:
+		// - Conjunto total de gameplay tags registradas no projeto.
+		// - Lista oficial centralizada em GetOfficialOmniGameplayTags().
+		// Outputs:
+		// - Log de validacao quando tudo esta conforme.
+		// - Fail-fast (Fatal) quando detecta Omni.* fora do conjunto oficial.
+		// Determinism:
+		// - Validacao ocorre antes do gameplay; sem efeitos variaveis de runtime.
+		// Failure modes:
+		// - Tag ilegal Omni.* aborta startup e orienta usar Game.* ou prefixo do projeto.
 		static const TCHAR* ReservedOmniPrefix = TEXT("Omni.");
 
 		static const TSet<FName>& GetOfficialOmniGameplayTags()
@@ -56,9 +70,9 @@ namespace OmniRuntimeConsole
 			if (InvalidOmniTags.Num() == 0)
 			{
 				UE_LOG(
-					LogTemp,
+					LogOmniTagGuard,
 					Log,
-					TEXT("[Omni][TagGuard] Validacao de GameplayTags concluida: Omni.* encontrados=%d, violacoes=0."),
+					TEXT("[Omni][TagGuard][Startup] Validacao concluida | Omni.* encontrados=%d, violacoes=0"),
 					OmniTagsFound
 				);
 				return;
@@ -67,9 +81,9 @@ namespace OmniRuntimeConsole
 			InvalidOmniTags.Sort();
 			const FString InvalidList = FString::Join(InvalidOmniTags, TEXT(", "));
 			UE_LOG(
-				LogTemp,
+				LogOmniTagGuard,
 				Fatal,
-				TEXT("[Omni][TagGuard] Falha de inicializacao: GameplayTag(s) Omni.* nao oficial(is): %s. O namespace Omni.* e reservado ao framework. Use Game.* ou prefixo do projeto (ex.: MeuProjeto.*)."),
+				TEXT("[Omni][TagGuard][Startup] Illegal Omni.* tag(s) detectada(s): %s | Use Game.* ou prefixo do projeto (ex.: MeuProjeto.*)"),
 				*InvalidList
 			);
 		}
@@ -77,8 +91,8 @@ namespace OmniRuntimeConsole
 
 	static TAutoConsoleVariable<int32> OmniDebugModeCVar(
 		TEXT("omni.debug"),
-		1,
-		TEXT("Modo de debug do Omni. 0=Desligado, 1=Basico, 2=Completo."),
+		0,
+		TEXT("Modo de debug do Omni. 0=Desligado (default), 1=Basico, 2=Completo."),
 		ECVF_Default
 	);
 
@@ -187,7 +201,7 @@ namespace OmniRuntimeConsole
 			}
 		);
 
-		UE_LOG(LogTemp, Log, TEXT("[Omni] Overlay de debug alternado. Subsystems afetados: %d."), AffectedSubsystems);
+		UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Console] Overlay de debug alternado | Subsystems afetados=%d"), AffectedSubsystems);
 	}
 
 	static void HandleOmniDebugClearCommand()
@@ -199,7 +213,7 @@ namespace OmniRuntimeConsole
 			}
 		);
 
-		UE_LOG(LogTemp, Log, TEXT("[Omni] Entradas de debug limpas. Subsystems afetados: %d."), AffectedSubsystems);
+		UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Console] Entradas de debug limpas | Subsystems afetados=%d"), AffectedSubsystems);
 	}
 
 	static void HandleOmniSprintCommand(const TArray<FString>& Args, UWorld* World)
@@ -216,7 +230,7 @@ namespace OmniRuntimeConsole
 					MovementSystem->SetSprintRequested(true);
 				}
 			);
-			UE_LOG(LogTemp, Log, TEXT("[Omni] Sprint solicitada. Systems afetados: %d"), AffectedSystems);
+			UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Console] Sprint solicitada | Systems afetados=%d"), AffectedSystems);
 			return;
 		}
 
@@ -228,7 +242,7 @@ namespace OmniRuntimeConsole
 					MovementSystem->SetSprintRequested(false);
 				}
 			);
-			UE_LOG(LogTemp, Log, TEXT("[Omni] Sprint cancelada. Systems afetados: %d"), AffectedSystems);
+			UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Console] Sprint cancelada | Systems afetados=%d"), AffectedSystems);
 			return;
 		}
 
@@ -240,7 +254,7 @@ namespace OmniRuntimeConsole
 					MovementSystem->ToggleSprintRequested();
 				}
 			);
-			UE_LOG(LogTemp, Log, TEXT("[Omni] Sprint alternada. Systems afetados: %d"), AffectedSystems);
+			UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Console] Sprint alternada | Systems afetados=%d"), AffectedSystems);
 			return;
 		}
 
@@ -260,9 +274,9 @@ namespace OmniRuntimeConsole
 				}
 			);
 			UE_LOG(
-				LogTemp,
+				LogOmniRuntime,
 				Log,
-				TEXT("[Omni] AutoSprint iniciada por %.1fs. Systems afetados: %d"),
+				TEXT("[Omni][Runtime][Console] AutoSprint iniciada | duracao=%.1fs systemsAfetados=%d"),
 				DurationSeconds,
 				AffectedSystems
 			);
@@ -275,9 +289,9 @@ namespace OmniRuntimeConsole
 			{
 				++StatusCount;
 				UE_LOG(
-					LogTemp,
+					LogOmniRuntime,
 					Log,
-					TEXT("[Omni] Status[%d] Stamina=%.1f/%.1f Exhausted=%s"),
+					TEXT("[Omni][Runtime][Console] Status[%d] stamina=%.1f/%.1f exhausted=%s"),
 					StatusCount,
 					StatusSystem->GetCurrentStamina(),
 					StatusSystem->GetMaxStamina(),
@@ -288,7 +302,11 @@ namespace OmniRuntimeConsole
 
 		if (StatusCount == 0)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[Omni] Nenhum StatusSystem encontrado (registry inicializado?)."));
+			UE_LOG(
+				LogOmniRuntime,
+				Warning,
+				TEXT("[Omni][Runtime][Console] Nenhum StatusSystem encontrado | Verifique Registry inicializado e Manifest configurado")
+			);
 		}
 	}
 

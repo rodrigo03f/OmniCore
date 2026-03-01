@@ -5,6 +5,19 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "OmniClockSubsystem.generated.h"
 
+// Purpose:
+// - Fornecer tempo simulado unificado para o runtime Omni.
+// - Expor contador de tick para diagnostico e sincronizacao.
+// Inputs:
+// - DeltaTime do loop de tick da engine.
+// Outputs:
+// - SimTimeSeconds e TickIndex consumidos por systems.
+// Determinism:
+// - Tempo monotono por acumulacao de DeltaTime (clamp >= 0).
+// - Fonte unica para systems que exigem tempo deterministico.
+// Failure modes:
+// - Sem falhas internas previstas; indisponibilidade deve ser tratada por
+//   dependentes com fail-fast na inicializacao.
 UCLASS()
 class OMNIRUNTIME_API UOmniClockSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
@@ -29,9 +42,6 @@ public:
 	void ResetClock();
 
 private:
-	UPROPERTY(EditAnywhere, Category = "Omni|Clock")
-	bool bUseWorldTimeProvider = true;
-
 	UPROPERTY(Transient)
 	double SimTimeSeconds = 0.0;
 

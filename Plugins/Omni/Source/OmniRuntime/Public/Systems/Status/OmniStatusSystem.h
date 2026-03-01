@@ -10,6 +10,24 @@ class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
 
+// Purpose:
+// - Manter estado de status do ator (stamina, exhausted e state tags).
+// - Processar consumo/regeneracao de stamina conforme config de profile.
+// - Responder queries de estado para outros systems.
+// Inputs:
+// - Config de status (Manifest -> StatusProfile).
+// - Commands/Events de systems (ex.: sprint start/stop).
+// - Tick do runtime para evolucao temporal.
+// Outputs:
+// - Valores de stamina/exhausted para consultas.
+// - Gameplay tags de estado (ex.: exhausted).
+// - Telemetria de debug.
+// Determinism:
+// - Evolucao de estado depende apenas de config + tick/runtime messages.
+// - Sem uso de random ou fontes de tempo externas no caminho normal.
+// Failure modes:
+// - Profile invalido/ausente => fail-fast com mensagem acionavel.
+// - Payload invalido em command/query/event e rejeitado pelo contrato.
 UCLASS()
 class OMNIRUNTIME_API UOmniStatusSystem : public UOmniRuntimeSystem
 {

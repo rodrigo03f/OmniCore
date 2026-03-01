@@ -12,6 +12,7 @@ namespace OmniDebug
 {
 	static const FName CategoryName(TEXT("Debug"));
 }
+DEFINE_LOG_CATEGORY_STATIC(LogOmniRuntime, Log, All);
 
 void UOmniDebugSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -53,7 +54,7 @@ void UOmniDebugSubsystem::Tick(float DeltaTime)
 	if (bEnableF9Clear && LocalPlayerController->WasInputKeyJustPressed(EKeys::F9))
 	{
 		ClearEntries();
-		UE_LOG(LogTemp, Log, TEXT("[Omni] Entradas de debug limpas via F9."));
+		UE_LOG(LogOmniRuntime, Log, TEXT("[Omni][Runtime][Debug] Entradas de debug limpas via F9 | Atalho de limpeza executado"));
 	}
 
 	if (bEnableF10Toggle && LocalPlayerController->WasInputKeyJustPressed(EKeys::F10))
@@ -347,6 +348,15 @@ void UOmniDebugSubsystem::SyncDebugModeFromConsole()
 
 	LastAppliedConsoleMode = CurrentConsoleValue;
 	SetDebugMode(ToDebugMode(CurrentConsoleValue));
+	if (CurrentConsoleValue > 0)
+	{
+		UE_LOG(
+			LogOmniRuntime,
+			Warning,
+			TEXT("[Omni][DevMode][Debug] Enabled: omni.debug=%d | Not for production"),
+			CurrentConsoleValue
+		);
+	}
 }
 
 EOmniDebugMode UOmniDebugSubsystem::ToDebugMode(const int32 ConsoleValue)
