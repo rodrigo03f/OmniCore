@@ -22,6 +22,9 @@ Executar U1 completo de cada sistema antes de aprofundar qualquer um.
 Responsabilidade:
 Sistema de decisão e controle de ações.
 
+Status de execução:
+- CONCLUÍDO em 02-03-2026
+
 Critério para avançar:
 
 - ReasonTag sempre preenchido
@@ -39,6 +42,9 @@ Somente após isso seguir para o próximo sistema.
 Responsabilidade:
 Sistema genérico de atributos (HP + Stamina).
 
+Status de execução:
+- CONCLUÍDO em 02-03-2026
+
 Critério para avançar:
 
 - DA_AttributesRecipe_Default funcionando
@@ -55,6 +61,9 @@ Critério para avançar:
 Responsabilidade:
 Execução física de Walk/Sprint com pipeline de velocidade.
 
+Status de execução:
+- CONCLUÍDO em 02-03-2026
+
 Critério para avançar:
 
 - Mode sempre definido (Walk ou Sprint)
@@ -70,6 +79,9 @@ Critério para avançar:
 
 Responsabilidade:
 Aplicação de CameraRigSpec via Mode tags.
+
+Status de execução:
+- PENDENTE
 
 Critério para avançar:
 
