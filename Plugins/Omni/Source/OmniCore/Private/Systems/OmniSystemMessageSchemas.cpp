@@ -235,13 +235,37 @@ bool FOmniCanStartActionQuerySchema::TryFromMessage(
 	OutData.SourceSystem = Message.SourceSystem;
 	OutData.ActionId = FName(*Message.Arguments.FindChecked(TEXT("ActionId")));
 	OutData.bAllowed = Message.bSuccess;
-	if (const FString* ReasonValue = Message.Output.Find(TEXT("Reason")))
+
+	FString ReasonTagValue;
+	if (const FString* ReasonTagOutput = Message.Output.Find(TEXT("ReasonTag")))
 	{
-		OutData.Reason = *ReasonValue;
+		ReasonTagValue = *ReasonTagOutput;
 	}
 	else
 	{
-		OutData.Reason = Message.Result;
+		ReasonTagValue = Message.Result;
+	}
+
+	if (!ReasonTagValue.IsEmpty())
+	{
+		OutData.ReasonTag = FGameplayTag::RequestGameplayTag(FName(*ReasonTagValue), false);
+	}
+	else
+	{
+		OutData.ReasonTag = FGameplayTag();
+	}
+
+	if (const FString* ReasonTextOutput = Message.Output.Find(TEXT("ReasonText")))
+	{
+		OutData.ReasonText = *ReasonTextOutput;
+	}
+	else if (const FString* LegacyReasonOutput = Message.Output.Find(TEXT("Reason")))
+	{
+		OutData.ReasonText = *LegacyReasonOutput;
+	}
+	else
+	{
+		OutData.ReasonText.Reset();
 	}
 	return true;
 }

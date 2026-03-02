@@ -721,7 +721,15 @@ bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
 
 	if (OutReason)
 	{
-		*OutReason = ResponseSchema.Reason;
+		const FString ReasonTagText = ResponseSchema.ReasonTag.IsValid() ? ResponseSchema.ReasonTag.ToString() : TEXT("Omni.Gate.Deny.Locked");
+		if (ResponseSchema.ReasonText.IsEmpty())
+		{
+			*OutReason = ReasonTagText;
+		}
+		else
+		{
+			*OutReason = FString::Printf(TEXT("%s (%s)"), *ReasonTagText, *ResponseSchema.ReasonText);
+		}
 	}
 
 	return ResponseSchema.bAllowed;

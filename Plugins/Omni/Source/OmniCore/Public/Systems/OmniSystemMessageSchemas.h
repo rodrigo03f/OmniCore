@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "Systems/OmniSystemMessaging.h"
 
 namespace OmniMessageSchema
@@ -55,7 +56,8 @@ struct OMNICORE_API FOmniCanStartActionQuerySchema
 	FName SourceSystem = NAME_None;
 	FName ActionId = NAME_None;
 	bool bAllowed = false;
-	FString Reason;
+	FGameplayTag ReasonTag;
+	FString ReasonText;
 
 	static FOmniQueryMessage ToMessage(const FOmniCanStartActionQuerySchema& Data);
 	static bool TryFromMessage(const FOmniQueryMessage& Message, FOmniCanStartActionQuerySchema& OutData, FString& OutError);
