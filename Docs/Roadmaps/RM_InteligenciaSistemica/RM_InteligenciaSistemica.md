@@ -26,3 +26,11 @@ Update ativo: SYS_Camera_U1 (não iniciado)
 - Smoke headless (`UnrealEditor-Cmd`): OK
   - `omni.sprint start/status/stop`
   - `omni.damage` e `omni.heal`
+
+## Carimbo Pós-Fix (02-03-2026)
+
+- `omni_build_dev.ps1`: OK (commit `3b6d84e`)
+- `omni_conformance_gate.ps1`: PASS (sem violações B1/B0)
+- Smoke headless: OK (`sprint + status + damage/heal + quit`)
+- SYS_Attributes U1 validado com asset real:
+  - caminho canônico adotado: `/Game/Data/Status/DA_AttributesRecipe_Default`

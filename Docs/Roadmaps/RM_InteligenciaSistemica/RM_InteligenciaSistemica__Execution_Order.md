@@ -24,6 +24,7 @@ Sistema de decisão e controle de ações.
 
 Status de execução:
 - CONCLUÍDO em 02-03-2026
+- REVALIDADO em 02-03-2026 com asset real (`/Game/Data/Status/DA_AttributesRecipe_Default`)
 
 Critério para avançar:
 
@@ -48,6 +49,7 @@ Status de execução:
 Critério para avançar:
 
 - DA_AttributesRecipe_Default funcionando
+- U1 validado com asset real em `/Game/Data/Status/DA_AttributesRecipe_Default`
 - Stamina drain / delay / regen operando
 - Game.State.Exhausted publicado corretamente
 - Snapshot estável
