@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Systems/ActionGate/OmniGateTypes.h"
 #include "OmniActionGateTypes.generated.h"
 
 UENUM(BlueprintType)
@@ -36,7 +37,7 @@ struct FOmniActionDefinition
 	EOmniActionPolicy Policy = EOmniActionPolicy::DenyIfActive;
 };
 
-USTRUCT(BlueprintType)
+USTRUCT(BlueprintType, meta = (Deprecated, DeprecationMessage = "Use FOmniGateDecision from OmniGateTypes.h"))
 struct FOmniActionGateDecision
 {
 	GENERATED_BODY()
@@ -45,14 +46,16 @@ struct FOmniActionGateDecision
 	FName ActionId = NAME_None;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Omni|ActionGate")
-	bool bAllowed = false;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Omni|ActionGate")
-	FString Reason;
+	FOmniGateDecision Decision;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Omni|ActionGate")
 	EOmniActionPolicy Policy = EOmniActionPolicy::DenyIfActive;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Omni|ActionGate")
 	TArray<FName> CanceledActions;
+
+	bool IsAllowed() const
+	{
+		return Decision.bAllowed;
+	}
 };

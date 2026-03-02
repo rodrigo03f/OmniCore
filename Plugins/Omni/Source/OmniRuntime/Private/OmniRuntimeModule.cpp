@@ -36,7 +36,10 @@ namespace OmniRuntimeConsole
 		static const TSet<FName>& GetOfficialOmniGameplayTags()
 		{
 			// Namespace Omni.* e reservado ao framework. Esta lista deve conter apenas tags oficiais.
-			static const TSet<FName> OfficialTags = {};
+			static const TSet<FName> OfficialTags = {
+				FName(TEXT("Omni.Gate.Allow.Ok")),
+				FName(TEXT("Omni.Gate.Deny.Locked"))
+			};
 			return OfficialTags;
 		}
 

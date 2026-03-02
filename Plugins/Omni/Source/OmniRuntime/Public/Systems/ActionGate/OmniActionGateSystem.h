@@ -4,6 +4,7 @@
 #include "GameplayTagContainer.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "Systems/ActionGate/OmniActionGateTypes.h"
+#include "Systems/ActionGate/OmniGateTypes.h"
 #include "OmniActionGateSystem.generated.h"
 
 class UOmniManifest;
@@ -19,7 +20,7 @@ class UOmniDebugSubsystem;
 // - Commands/Queries/Events recebidos via registry.
 // - Estado atual de acoes ativas e locks.
 // Outputs:
-// - Decisao da acao (FOmniActionGateDecision).
+// - Decisao da acao (FOmniGateDecision).
 // - Conjunto de acoes ativas e tags de lock ativas.
 // - Eventos para outros systems interessados.
 // Determinism:
@@ -44,10 +45,25 @@ public:
 	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
-	bool TryStartAction(FName ActionId, FOmniActionGateDecision& OutDecision);
+	FOmniGateDecision Can(FGameplayTag ActionTag, const FGameplayTagContainer& ContextTags) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
+	FOmniGateDecision StartAction(FName ActionId);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
+	bool AddLock(const FOmniGateLock& Lock);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
+	bool RemoveLock(const FOmniGateLock& Lock);
+
+	UFUNCTION(BlueprintPure, Category = "Omni|ActionGate")
+	int32 GetActiveLockCount() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Omni|ActionGate")
 	bool StopAction(FName ActionId, FName Reason = NAME_None);
+
+	UFUNCTION(BlueprintPure, Category = "Omni|ActionGate")
+	TArray<FOmniGateLock> GetActiveLockSnapshot() const;
 
 	UFUNCTION(BlueprintPure, Category = "Omni|ActionGate")
 	bool IsActionActive(FName ActionId) const;
@@ -62,19 +78,22 @@ public:
 	TArray<FName> GetKnownActionIds() const;
 
 	UFUNCTION(BlueprintPure, Category = "Omni|ActionGate")
-	FOmniActionGateDecision GetLastDecision() const;
+	FOmniGateDecision GetLastDecision() const;
 
 private:
 	bool TryLoadDefinitionsFromManifest(const UOmniManifest* Manifest, FString& OutError);
 	void RebuildDefinitionMap();
 	void BroadcastActionLifecycleEvent(FName EventName, FName ActionId, const FString& Reason = FString(), FName EndReason = NAME_None);
 	FGameplayTagContainer BuildCurrentBlockingContext() const;
-	bool EvaluateStartAction(FName ActionId, FOmniActionGateDecision& OutDecision, bool bApplyChanges);
+	FOmniGateDecision EvaluateStartAction(FName ActionId, bool bApplyChanges);
+	FGameplayTag ResolveActionTag(FName ActionId) const;
+	void RemoveAllActionLocks(FName ActionId);
+	TArray<FOmniGateLock> BuildSortedLocks() const;
+	static bool IsScopeLess(EOmniActionGateLockScope Left, EOmniActionGateLockScope Right);
 	static bool TryParseActionId(const FOmniQueryMessage& Query, FName& OutActionId);
 	void AddActionLocks(const FOmniActionDefinition& Definition);
-	void RemoveActionLocks(const FOmniActionDefinition& Definition);
 	void PublishTelemetry();
-	void PublishDecision(const FOmniActionGateDecision& Decision, bool bEmitLogEntry);
+	void PublishDecision(const FOmniGateDecision& Decision, FName ActionId, bool bEmitLogEntry);
 
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Omni|ActionGate")
@@ -96,10 +115,18 @@ private:
 	TSet<FName> ActiveActions;
 
 	UPROPERTY(Transient)
-	TMap<FGameplayTag, int32> ActiveLockRefCounts;
+	TArray<FOmniGateLock> ActiveLocks;
+
+	TMap<FName, TArray<FOmniGateLock>> LocksByAction;
 
 	UPROPERTY(Transient)
-	FOmniActionGateDecision LastDecision;
+	FOmniGateDecision LastDecision;
+
+	UPROPERTY(Transient)
+	FGameplayTag AllowReasonTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag DenyReasonTag;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;

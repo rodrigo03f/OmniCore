@@ -11,7 +11,7 @@ UOmniDevActionLibrary::UOmniDevActionLibrary()
 	SprintAction.ActionId = TEXT("Movement.Sprint");
 	SprintAction.Policy = EOmniActionPolicy::DenyIfActive;
 
-	const FGameplayTag ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
+	const FGameplayTag ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("Game.State.Exhausted"), false);
 	if (ExhaustedTag.IsValid())
 	{
 		SprintAction.BlockedBy.AddTag(ExhaustedTag);
