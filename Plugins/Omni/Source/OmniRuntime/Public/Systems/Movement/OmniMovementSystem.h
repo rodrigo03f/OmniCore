@@ -75,6 +75,7 @@ private:
 	void RefreshModeTags();
 	void UpdateEffectiveSpeed();
 	void PublishTelemetry() const;
+	void UpdateSprintRequestedState();
 	double GetNowSeconds() const;
 	bool QueryStatusIsExhausted() const;
 	void DispatchStatusSprinting(bool bSprinting) const;
@@ -89,6 +90,15 @@ private:
 
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
+
+	UPROPERTY(Transient)
+	bool bSprintRequestedByCommand = false;
+
+	UPROPERTY(Transient)
+	bool bSprintRequestedByAuto = false;
+
+	UPROPERTY(Transient)
+	bool bSprintRequestedByKeyboard = false;
 
 	UPROPERTY(Transient)
 	bool bIsSprinting = false;

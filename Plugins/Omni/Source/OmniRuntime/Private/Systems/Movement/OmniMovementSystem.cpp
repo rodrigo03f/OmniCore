@@ -127,6 +127,9 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 	StateSprintingTag = FGameplayTag::RequestGameplayTag(OmniMovement::StateSprintingTagName, false);
 
 	bSprintRequested = false;
+	bSprintRequestedByCommand = false;
+	bSprintRequestedByAuto = false;
+	bSprintRequestedByKeyboard = false;
 	bIsSprinting = false;
 	MovementMode = EOmniMovementMode::Walk;
 	NextStartAttemptSimTime = 0.0f;
@@ -152,6 +155,11 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 	StopSprinting(TEXT("Shutdown"));
 	SetMovementMode(EOmniMovementMode::Walk, TEXT("Shutdown"));
 	MovementTags.Reset();
+	bSprintRequested = false;
+	bSprintRequestedByCommand = false;
+	bSprintRequestedByAuto = false;
+	bSprintRequestedByKeyboard = false;
+	AutoSprintRemainingSeconds = 0.0f;
 	CachedBaseSpeed = 0.0f;
 	bBaseSpeedCaptured = false;
 	bObservedSprintStartedEvent = false;
@@ -196,12 +204,18 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 			if (APlayerController* PC = GameInstance->GetFirstLocalPlayerController())
 			{
 				const bool bShiftDown = PC->IsInputKeyDown(EKeys::LeftShift) || PC->IsInputKeyDown(EKeys::RightShift);
-				if (bShiftDown != bSprintRequested)
+				if (bShiftDown != bSprintRequestedByKeyboard)
 				{
-					SetSprintRequested(bShiftDown);
+					bSprintRequestedByKeyboard = bShiftDown;
+					UpdateSprintRequestedState();
 				}
 			}
 		}
+	}
+	else if (bSprintRequestedByKeyboard)
+	{
+		bSprintRequestedByKeyboard = false;
+		UpdateSprintRequestedState();
 	}
 
 	if (AutoSprintRemainingSeconds > 0.0f)
@@ -209,7 +223,8 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		AutoSprintRemainingSeconds = FMath::Max(0.0f, AutoSprintRemainingSeconds - DeltaTime);
 		if (AutoSprintRemainingSeconds <= KINDA_SMALL_NUMBER)
 		{
-			SetSprintRequested(false);
+			bSprintRequestedByAuto = false;
+			UpdateSprintRequestedState();
 			if (DebugSubsystem.IsValid())
 			{
 				DebugSubsystem->LogEvent(OmniMovement::CategoryName, TEXT("AutoSprint finalizado"), OmniMovement::SourceName);
@@ -217,7 +232,9 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		}
 	}
 
-	if (bSprintRequested && !bIsSprinting && SimTime >= NextStartAttemptSimTime)
+	const bool bStatusIsExhausted = (bSprintRequested || bIsSprinting) && QueryStatusIsExhausted();
+
+	if (bSprintRequested && !bIsSprinting && !bStatusIsExhausted && SimTime >= NextStartAttemptSimTime)
 	{
 		StartSprinting();
 	}
@@ -227,7 +244,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		StopSprinting(TEXT("Released"));
 	}
 
-	if (bIsSprinting && QueryStatusIsExhausted())
+	if (bIsSprinting && bStatusIsExhausted)
 	{
 		StopSprinting(TEXT("Exhausted"));
 	}
@@ -368,34 +385,26 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 
 void UOmniMovementSystem::SetSprintRequested(const bool bRequested)
 {
-	if (bSprintRequested == bRequested)
+	const bool bNeedsAutoClear = !bRequested && (bSprintRequestedByAuto || AutoSprintRemainingSeconds > KINDA_SMALL_NUMBER);
+	if (bSprintRequestedByCommand == bRequested && !bNeedsAutoClear)
 	{
 		return;
 	}
 
-	bSprintRequested = bRequested;
-	if (!bSprintRequested)
+	bSprintRequestedByCommand = bRequested;
+	if (!bRequested)
 	{
+		bSprintRequestedByAuto = false;
 		AutoSprintRemainingSeconds = 0.0f;
 	}
-	if (IntentSprintRequestedTag.IsValid())
-	{
-		if (bSprintRequested)
-		{
-			MovementTags.AddTag(IntentSprintRequestedTag);
-		}
-		else
-		{
-			MovementTags.RemoveTag(IntentSprintRequestedTag);
-		}
-	}
+	UpdateSprintRequestedState();
 
 	PublishTelemetry();
 }
 
 void UOmniMovementSystem::ToggleSprintRequested()
 {
-	SetSprintRequested(!bSprintRequested);
+	SetSprintRequested(!bSprintRequestedByCommand);
 }
 
 void UOmniMovementSystem::StartAutoSprint(const float DurationSeconds)
@@ -403,7 +412,9 @@ void UOmniMovementSystem::StartAutoSprint(const float DurationSeconds)
 	AutoSprintRemainingSeconds = FMath::Max(0.0f, DurationSeconds);
 	if (AutoSprintRemainingSeconds > 0.0f)
 	{
-		SetSprintRequested(true);
+		bSprintRequestedByAuto = true;
+		UpdateSprintRequestedState();
+		PublishTelemetry();
 	}
 }
 
@@ -550,6 +561,28 @@ void UOmniMovementSystem::UpdateEffectiveSpeed()
 
 	const float ModeMultiplier = MovementMode == EOmniMovementMode::Sprint ? RuntimeSettings.SprintMultiplier : 1.0f;
 	CharacterMovement->MaxWalkSpeed = CachedBaseSpeed * ModeMultiplier;
+}
+
+void UOmniMovementSystem::UpdateSprintRequestedState()
+{
+	const bool bNewSprintRequested = bSprintRequestedByCommand || bSprintRequestedByAuto || bSprintRequestedByKeyboard;
+	if (bSprintRequested == bNewSprintRequested)
+	{
+		return;
+	}
+
+	bSprintRequested = bNewSprintRequested;
+	if (IntentSprintRequestedTag.IsValid())
+	{
+		if (bSprintRequested)
+		{
+			MovementTags.AddTag(IntentSprintRequestedTag);
+		}
+		else
+		{
+			MovementTags.RemoveTag(IntentSprintRequestedTag);
+		}
+	}
 }
 
 void UOmniMovementSystem::PublishTelemetry() const

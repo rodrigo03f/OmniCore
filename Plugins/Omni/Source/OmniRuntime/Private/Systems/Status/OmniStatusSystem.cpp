@@ -27,7 +27,7 @@ namespace OmniStatus
 	static const FName ConfigKeyRecipe(TEXT("Recipe"));
 	static const FName ConfigSectionLegacy(TEXT("/Script/OmniRuntime.OmniStatusSystem"));
 	static const FName ConfigKeyRecipeFlat(TEXT("Omni.Attributes.Recipe"));
-	static const TCHAR* DefaultRecipeAssetPath = TEXT("/Game/Omni/Recipes/DA_AttributesRecipe_Default.DA_AttributesRecipe_Default");
+	static const TCHAR* DefaultRecipeAssetPath = TEXT("/Game/Data/Status/DA_AttributesRecipe_Default.DA_AttributesRecipe_Default");
 	static const FName DebugMetricProfileStatus(TEXT("Omni.Profile.Status"));
 	static const FName DebugMetricProfileAttributes(TEXT("Omni.Profile.Attributes"));
 	static const FName HpTagName(TEXT("Game.Attr.HP"));
