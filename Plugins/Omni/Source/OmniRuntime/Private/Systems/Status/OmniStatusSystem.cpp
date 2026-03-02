@@ -2,9 +2,10 @@
 
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
-#include "Library/OmniStatusLibrary.h"
 #include "Manifest/OmniManifest.h"
-#include "Profile/OmniStatusProfile.h"
+#include "Misc/PackageName.h"
+#include "Profile/OmniAttributesRecipeDataAsset.h"
+#include "Systems/OmniClockSubsystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
 #include "UObject/SoftObjectPath.h"
@@ -13,8 +14,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogOmniStatusSystem, Log, All);
 
 namespace OmniStatus
 {
-	static const FName CategoryName(TEXT("Status"));
-	static const FName SourceName(TEXT("StatusSystem"));
+	static const FName CategoryName(TEXT("Attributes"));
+	static const FName SourceName(TEXT("AttributesSystem"));
 	static const FName SystemId(TEXT("Status"));
 	static const FName CommandSetSprinting(TEXT("SetSprinting"));
 	static const FName CommandConsumeStamina(TEXT("ConsumeStamina"));
@@ -22,14 +23,38 @@ namespace OmniStatus
 	static const FName QueryIsExhausted(TEXT("IsExhausted"));
 	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName QueryGetStamina(TEXT("GetStamina"));
-	static const FName ManifestSettingStatusProfileAssetPath(TEXT("StatusProfileAssetPath"));
-	static const TCHAR* DefaultStatusProfileAssetPath = TEXT("/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default");
+	static const FName ConfigSectionAttributes(TEXT("Omni.Attributes"));
+	static const FName ConfigKeyRecipe(TEXT("Recipe"));
+	static const FName ConfigSectionLegacy(TEXT("/Script/OmniRuntime.OmniStatusSystem"));
+	static const FName ConfigKeyRecipeFlat(TEXT("Omni.Attributes.Recipe"));
+	static const TCHAR* DefaultRecipeAssetPath = TEXT("/Game/Omni/Recipes/DA_AttributesRecipe_Default.DA_AttributesRecipe_Default");
 	static const FName DebugMetricProfileStatus(TEXT("Omni.Profile.Status"));
+	static const FName DebugMetricProfileAttributes(TEXT("Omni.Profile.Attributes"));
+	static const FName HpTagName(TEXT("Game.Attr.HP"));
+	static const FName StaminaTagName(TEXT("Game.Attr.Stamina"));
+	static const FName SprintingStateTagName(TEXT("Game.State.Sprinting"));
+	static const FName ExhaustedStateTagName(TEXT("Game.State.Exhausted"));
+}
+
+static FString NormalizeRecipePath(const FString& RawPath)
+{
+	FString Path = RawPath;
+	Path.TrimStartAndEndInline();
+	if (Path.IsEmpty())
+	{
+		return FString(OmniStatus::DefaultRecipeAssetPath);
+	}
+	if (Path.Contains(TEXT(".")))
+	{
+		return Path;
+	}
+	const FString AssetName = FPackageName::GetShortName(Path);
+	return FString::Printf(TEXT("%s.%s"), *Path, *AssetName);
 }
 
 FName UOmniStatusSystem::GetSystemId_Implementation() const
 {
-	return TEXT("Status");
+	return OmniStatus::SystemId;
 }
 
 TArray<FName> UOmniStatusSystem::GetDependencies_Implementation() const
@@ -48,80 +73,99 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 		if (UGameInstance* GameInstance = Registry->GetGameInstance())
 		{
 			DebugSubsystem = GameInstance->GetSubsystem<UOmniDebugSubsystem>();
+			ClockSubsystem = GameInstance->GetSubsystem<UOmniClockSubsystem>();
 		}
 	}
 	if (DebugSubsystem.IsValid())
 	{
 		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Pending"));
+		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileAttributes, TEXT("Pending"));
 	}
-
-	RuntimeSettings = FOmniStatusSettings();
-	FString LoadError;
-	if (!TryLoadSettingsFromManifest(Manifest, LoadError))
+	if (!ClockSubsystem.IsValid())
 	{
-		UE_LOG(
-			LogOmniStatusSystem,
-			Error,
-			TEXT("[Omni][Status][Init] Fail-fast: configuracao invalida | %s"),
-			*LoadError
-		);
+		const FString ClockError = TEXT("[Omni][Attributes][Init] OmniClock obrigatorio nao encontrado.");
+		UE_LOG(LogOmniStatusSystem, Error, TEXT("%s"), *ClockError);
 		if (DebugSubsystem.IsValid())
 		{
 			DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
-			DebugSubsystem->LogError(OmniStatus::CategoryName, LoadError, OmniStatus::SourceName);
+			DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileAttributes, TEXT("Failed"));
+			DebugSubsystem->LogError(OmniStatus::CategoryName, ClockError, OmniStatus::SourceName);
 		}
 		return;
 	}
 
-	ExhaustedTag = RuntimeSettings.ExhaustedTag;
-	if (!ExhaustedTag.IsValid())
+	ResolveOfficialTags();
+	ApplyFallbackRecipe();
+
+	FString RecipeLoadError;
+	const bool bLoadedRecipeFromConfig = TryLoadRecipeFromConfig(RecipeLoadError);
+	if (!bLoadedRecipeFromConfig)
 	{
-		ExhaustedTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("[Omni][Attributes][Init] Recipe via config indisponivel. Usando fallback deterministico | %s"),
+			*RecipeLoadError
+		);
+		if (DebugSubsystem.IsValid())
+		{
+			DebugSubsystem->LogWarning(OmniStatus::CategoryName, RecipeLoadError, OmniStatus::SourceName);
+		}
 	}
 
-	CurrentStamina = RuntimeSettings.MaxStamina;
+	LastClockSeconds = ClockSubsystem->GetSimTime();
+	TimeSinceLastStaminaDrain = StaminaRules.RegenDelaySeconds;
 	bExhausted = false;
-	bSprinting = false;
-	TimeSinceLastConsumption = RuntimeSettings.RegenDelaySeconds;
 	UpdateStateTags();
+	InitializeSnapshot();
 	PublishTelemetry();
 	SetInitializationResult(true);
+
 	if (DebugSubsystem.IsValid())
 	{
 		DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Loaded"));
-	}
-
-	UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Status][Init] Inicializado | manifest=%s"), *GetNameSafe(Manifest));
-
-	if (DebugSubsystem.IsValid())
-	{
-		DebugSubsystem->LogEvent(
-			OmniStatus::CategoryName,
-			FString::Printf(TEXT("Status inicializado. Stamina=%.1f"), CurrentStamina),
-			OmniStatus::SourceName
+		DebugSubsystem->SetMetric(
+			OmniStatus::DebugMetricProfileAttributes,
+			bLoadedRecipeFromConfig ? TEXT("RecipeLoaded") : TEXT("FallbackLoaded")
 		);
 	}
+
+	UE_LOG(
+		LogOmniStatusSystem,
+		Log,
+		TEXT("[Omni][Attributes][Init] Inicializado | manifest=%s recipeMode=%s"),
+		*GetNameSafe(Manifest),
+		bLoadedRecipeFromConfig ? TEXT("Config") : TEXT("Fallback")
+	);
 }
 
 void UOmniStatusSystem::ShutdownSystem_Implementation()
 {
-	bSprinting = false;
-	bExhausted = false;
+	AttributesByTag.Reset();
+	ContextTags.Reset();
 	StateTags.Reset();
+	StaminaRules = FOmniStaminaRules();
+	Snapshot = FOmniAttributeSnapshot();
+	bExhausted = false;
+	TimeSinceLastStaminaDrain = 0.0f;
+	LastClockSeconds = 0.0;
 
 	if (DebugSubsystem.IsValid())
 	{
 		DebugSubsystem->RemoveMetric(TEXT("Status.Stamina"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Exhausted"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Sprinting"));
+		DebugSubsystem->RemoveMetric(TEXT("Status.HP"));
 		DebugSubsystem->RemoveMetric(OmniStatus::DebugMetricProfileStatus);
-		DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Status finalizado"), OmniStatus::SourceName);
+		DebugSubsystem->RemoveMetric(OmniStatus::DebugMetricProfileAttributes);
+		DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Attributes finalizado"), OmniStatus::SourceName);
 	}
 
 	DebugSubsystem.Reset();
+	ClockSubsystem.Reset();
 	Registry.Reset();
 
-	UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Status][Shutdown] Concluido"));
+	UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Attributes][Shutdown] Concluido"));
 }
 
 bool UOmniStatusSystem::IsTickEnabled_Implementation() const
@@ -131,59 +175,20 @@ bool UOmniStatusSystem::IsTickEnabled_Implementation() const
 
 void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 {
-	if (DeltaTime <= 0.0f)
+	(void)DeltaTime;
+
+	float ClockDeltaTime = 0.0f;
+	if (!ResolveClockDelta(ClockDeltaTime))
 	{
 		return;
 	}
 
-	if (bSprinting)
+	if (ClockDeltaTime > 0.0f)
 	{
-		ConsumeStamina(RuntimeSettings.SprintDrainPerSecond * DeltaTime);
-	}
-	else
-	{
-		TimeSinceLastConsumption += DeltaTime;
-		if (TimeSinceLastConsumption >= RuntimeSettings.RegenDelaySeconds && CurrentStamina < RuntimeSettings.MaxStamina)
-		{
-			AddStamina(RuntimeSettings.RegenPerSecond * DeltaTime);
-		}
+		TickStamina(ClockDeltaTime);
 	}
 
-	if (!bExhausted && CurrentStamina <= RuntimeSettings.ExhaustedThreshold)
-	{
-		bExhausted = true;
-		UpdateStateTags();
-
-		if (Registry.IsValid())
-		{
-			FOmniExhaustedEventSchema EventSchema;
-			EventSchema.SourceSystem = OmniStatus::SystemId;
-			Registry->BroadcastEvent(FOmniExhaustedEventSchema::ToMessage(EventSchema));
-		}
-
-		if (DebugSubsystem.IsValid())
-		{
-			DebugSubsystem->LogWarning(OmniStatus::CategoryName, TEXT("Entrou em estado Exhausted"), OmniStatus::SourceName);
-		}
-	}
-	else if (bExhausted && CurrentStamina >= RuntimeSettings.ExhaustRecoverThreshold)
-	{
-		bExhausted = false;
-		UpdateStateTags();
-
-		if (Registry.IsValid())
-		{
-			FOmniExhaustedClearedEventSchema EventSchema;
-			EventSchema.SourceSystem = OmniStatus::SystemId;
-			Registry->BroadcastEvent(FOmniExhaustedClearedEventSchema::ToMessage(EventSchema));
-		}
-
-		if (DebugSubsystem.IsValid())
-		{
-			DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Saiu de estado Exhausted"), OmniStatus::SourceName);
-		}
-	}
-
+	InitializeSnapshot();
 	PublishTelemetry();
 }
 
@@ -253,6 +258,7 @@ bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 				Tags.Add(Tag.ToString());
 			}
 		}
+		Tags.Sort();
 
 		Query.bHandled = true;
 		Query.bSuccess = true;
@@ -262,11 +268,15 @@ bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 
 	if (Query.QueryName == OmniStatus::QueryGetStamina)
 	{
+		const FOmniAttributeValue* StaminaAttribute = FindAttribute(StaminaTag);
+		const float CurrentStamina = StaminaAttribute ? StaminaAttribute->Current : 0.0f;
+		const float MaxStamina = StaminaAttribute ? StaminaAttribute->Max : 0.0f;
+
 		Query.bHandled = true;
 		Query.bSuccess = true;
-		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, RuntimeSettings.MaxStamina);
+		Query.Result = FString::Printf(TEXT("%.2f/%.2f"), CurrentStamina, MaxStamina);
 		Query.SetOutputValue(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
-		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), RuntimeSettings.MaxStamina));
+		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStamina));
 		Query.SetOutputValue(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
 		return true;
 	}
@@ -280,24 +290,37 @@ void UOmniStatusSystem::HandleEvent_Implementation(const FOmniEventMessage& Even
 	(void)Event;
 }
 
+FOmniAttributeSnapshot UOmniStatusSystem::GetSnapshot() const
+{
+	return Snapshot;
+}
+
 float UOmniStatusSystem::GetCurrentStamina() const
 {
-	return CurrentStamina;
+	if (const FOmniAttributeValue* StaminaAttribute = FindAttribute(StaminaTag))
+	{
+		return StaminaAttribute->Current;
+	}
+	return 0.0f;
 }
 
 float UOmniStatusSystem::GetMaxStamina() const
 {
-	return RuntimeSettings.MaxStamina;
+	if (const FOmniAttributeValue* StaminaAttribute = FindAttribute(StaminaTag))
+	{
+		return StaminaAttribute->Max;
+	}
+	return 0.0f;
 }
 
 float UOmniStatusSystem::GetStaminaNormalized() const
 {
-	if (RuntimeSettings.MaxStamina <= KINDA_SMALL_NUMBER)
+	const float MaxStamina = GetMaxStamina();
+	if (MaxStamina <= KINDA_SMALL_NUMBER)
 	{
 		return 0.0f;
 	}
-
-	return CurrentStamina / RuntimeSettings.MaxStamina;
+	return GetCurrentStamina() / MaxStamina;
 }
 
 bool UOmniStatusSystem::IsExhausted() const
@@ -312,17 +335,20 @@ const FGameplayTagContainer& UOmniStatusSystem::GetStateTags() const
 
 void UOmniStatusSystem::SetSprinting(const bool bInSprinting)
 {
-	if (bSprinting == bInSprinting)
+	if (SprintingStateTag.IsValid())
 	{
-		return;
+		if (bInSprinting)
+		{
+			ContextTags.AddTag(SprintingStateTag);
+		}
+		else
+		{
+			ContextTags.RemoveTag(SprintingStateTag);
+		}
 	}
 
-	bSprinting = bInSprinting;
-	if (!bSprinting)
-	{
-		TimeSinceLastConsumption = 0.0f;
-	}
-
+	UpdateStateTags();
+	InitializeSnapshot();
 	PublishTelemetry();
 }
 
@@ -333,8 +359,15 @@ void UOmniStatusSystem::ConsumeStamina(const float Amount)
 		return;
 	}
 
-	CurrentStamina = FMath::Max(0.0f, CurrentStamina - Amount);
-	TimeSinceLastConsumption = 0.0f;
+	FOmniAttributeValue* StaminaAttribute = FindAttributeMutable(StaminaTag);
+	if (!StaminaAttribute)
+	{
+		return;
+	}
+
+	StaminaAttribute->Current -= Amount;
+	ClampAttribute(*StaminaAttribute);
+	TimeSinceLastStaminaDrain = 0.0f;
 }
 
 void UOmniStatusSystem::AddStamina(const float Amount)
@@ -344,200 +377,328 @@ void UOmniStatusSystem::AddStamina(const float Amount)
 		return;
 	}
 
-	CurrentStamina = FMath::Min(RuntimeSettings.MaxStamina, CurrentStamina + Amount);
+	FOmniAttributeValue* StaminaAttribute = FindAttributeMutable(StaminaTag);
+	if (!StaminaAttribute)
+	{
+		return;
+	}
+
+	StaminaAttribute->Current += Amount;
+	ClampAttribute(*StaminaAttribute);
 }
 
-bool UOmniStatusSystem::TryLoadSettingsFromManifest(
-	const UOmniManifest* Manifest,
-	FString& OutError
-)
+void UOmniStatusSystem::ApplyDamage(const float Amount)
+{
+	if (Amount <= 0.0f)
+	{
+		return;
+	}
+
+	FOmniAttributeValue* HpAttribute = FindAttributeMutable(HpTag);
+	if (!HpAttribute)
+	{
+		return;
+	}
+
+	HpAttribute->Current -= Amount;
+	ClampAttribute(*HpAttribute);
+	InitializeSnapshot();
+	PublishTelemetry();
+}
+
+void UOmniStatusSystem::ApplyHeal(const float Amount)
+{
+	if (Amount <= 0.0f)
+	{
+		return;
+	}
+
+	FOmniAttributeValue* HpAttribute = FindAttributeMutable(HpTag);
+	if (!HpAttribute)
+	{
+		return;
+	}
+
+	HpAttribute->Current += Amount;
+	ClampAttribute(*HpAttribute);
+	InitializeSnapshot();
+	PublishTelemetry();
+}
+
+bool UOmniStatusSystem::TryLoadRecipeFromConfig(FString& OutError)
 {
 	OutError.Reset();
 
-	if (!Manifest)
+	FString RecipePath;
+	bool bFoundRecipePath = GConfig->GetString(
+		*OmniStatus::ConfigSectionAttributes.ToString(),
+		*OmniStatus::ConfigKeyRecipe.ToString(),
+		RecipePath,
+		GGameIni
+	);
+	if (!bFoundRecipePath)
 	{
-		OutError = TEXT("Manifest is null.");
+		bFoundRecipePath = GConfig->GetString(
+			*OmniStatus::ConfigSectionLegacy.ToString(),
+			*OmniStatus::ConfigKeyRecipeFlat.ToString(),
+			RecipePath,
+			GGameIni
+		);
+	}
+	if (!bFoundRecipePath || RecipePath.IsEmpty())
+	{
+		RecipePath = OmniStatus::DefaultRecipeAssetPath;
+	}
+
+	const FString NormalizedPath = NormalizeRecipePath(RecipePath);
+	const FSoftObjectPath RecipeAssetPath(NormalizedPath);
+	if (RecipeAssetPath.IsNull())
+	{
+		OutError = FString::Printf(TEXT("Recipe path invalido em config: '%s'."), *RecipePath);
 		return false;
 	}
 
-	const FName RuntimeSystemId = GetSystemId();
-	const FOmniSystemManifestEntry* SystemEntry = Manifest->FindEntryById(RuntimeSystemId);
-	if (!SystemEntry)
-	{
-		SystemEntry = Manifest->Systems.FindByPredicate(
-			[this](const FOmniSystemManifestEntry& Entry)
-			{
-				UClass* LoadedClass = Entry.SystemClass.LoadSynchronous();
-				return LoadedClass == GetClass();
-			}
-		);
-	}
-	if (!SystemEntry)
+	UObject* RecipeObject = RecipeAssetPath.TryLoad();
+	UOmniAttributesRecipeDataAsset* RecipeAsset = Cast<UOmniAttributesRecipeDataAsset>(RecipeObject);
+	if (!RecipeAsset)
 	{
 		OutError = FString::Printf(
-			TEXT("SystemId '%s' not found in manifest '%s'."),
-			*RuntimeSystemId.ToString(),
-			*GetNameSafe(Manifest)
+			TEXT("Nao foi possivel carregar UOmniAttributesRecipeDataAsset em '%s'."),
+			*RecipeAssetPath.ToString()
 		);
 		return false;
 	}
 
-	UOmniStatusProfile* LoadedProfile = nullptr;
-	bool bLoadedFromAssetPath = false;
-
-	FString ProfileAssetPathValue;
-	if (!SystemEntry->TryGetSetting(OmniStatus::ManifestSettingStatusProfileAssetPath, ProfileAssetPathValue)
-		|| ProfileAssetPathValue.IsEmpty())
+	if (RecipeAsset->Attributes.Num() == 0)
 	{
-		OutError = FString::Printf(
-			TEXT("Missing required manifest setting '%s' for SystemId '%s'. Expected path: %s. Recommendation: create a UOmniStatusProfile asset at the expected path and assign a UOmniStatusLibrary."),
-			*OmniStatus::ManifestSettingStatusProfileAssetPath.ToString(),
-			*RuntimeSystemId.ToString(),
-			OmniStatus::DefaultStatusProfileAssetPath
-		);
-	}
-	else
-	{
-		const FSoftObjectPath ProfileAssetPath(ProfileAssetPathValue);
-		if (ProfileAssetPath.IsNull())
-		{
-			OutError = FString::Printf(
-				TEXT("Invalid '%s' value for SystemId '%s': '%s'. Recommendation: set a valid UOmniStatusProfile asset path (expected: %s)."),
-				*OmniStatus::ManifestSettingStatusProfileAssetPath.ToString(),
-				*RuntimeSystemId.ToString(),
-				*ProfileAssetPathValue,
-				OmniStatus::DefaultStatusProfileAssetPath
-			);
-		}
-		else
-		{
-			UObject* LoadedObject = ProfileAssetPath.TryLoad();
-			if (!LoadedObject)
-			{
-				OutError = FString::Printf(
-					TEXT("Status profile asset not found for SystemId '%s': %s. Recommendation: create a UOmniStatusProfile asset at this path and assign a UOmniStatusLibrary."),
-					*RuntimeSystemId.ToString(),
-					*ProfileAssetPath.ToString()
-				);
-			}
-			else if (UOmniStatusProfile* CastedProfile = Cast<UOmniStatusProfile>(LoadedObject))
-			{
-				LoadedProfile = CastedProfile;
-				bLoadedFromAssetPath = true;
-			}
-			else
-			{
-				OutError = FString::Printf(
-					TEXT("Asset type mismatch for SystemId '%s': %s is '%s' (expected UOmniStatusProfile)."),
-					*RuntimeSystemId.ToString(),
-					*ProfileAssetPath.ToString(),
-					*LoadedObject->GetClass()->GetPathName()
-				);
-			}
-		}
-	}
-
-	if (!LoadedProfile)
-	{
-		if (OutError.IsEmpty())
-		{
-			OutError = FString::Printf(
-				TEXT("Failed to resolve status profile for SystemId '%s'. Expected path: %s."),
-				*RuntimeSystemId.ToString(),
-				OmniStatus::DefaultStatusProfileAssetPath
-			);
-		}
+		OutError = FString::Printf(TEXT("Recipe '%s' nao contem atributos."), *GetNameSafe(RecipeAsset));
 		return false;
 	}
 
-	if (bLoadedFromAssetPath)
+	TMap<FGameplayTag, FOmniAttributeValue> LoadedAttributes;
+	FOmniStaminaRules LoadedStaminaRules = StaminaRules;
+	for (const FOmniAttributeRecipeEntry& Entry : RecipeAsset->Attributes)
 	{
-		const FSoftObjectPath StatusLibraryPath = LoadedProfile->StatusLibrary.ToSoftObjectPath();
-		if (StatusLibraryPath.IsNull())
+		FString ValidationError;
+		if (!Entry.IsValid(ValidationError))
 		{
 			OutError = FString::Printf(
-				TEXT("Profile '%s' for SystemId '%s' has null StatusLibrary. Recommendation: assign a UOmniStatusLibrary asset."),
-				*GetNameSafe(LoadedProfile),
-				*RuntimeSystemId.ToString()
+				TEXT("Recipe '%s' contem entrada invalida para tag '%s': %s"),
+				*GetNameSafe(RecipeAsset),
+				*Entry.AttrTag.ToString(),
+				*ValidationError
 			);
 			return false;
 		}
 
-		UObject* LoadedLibraryObject = StatusLibraryPath.TryLoad();
-		if (!LoadedLibraryObject)
+		FOmniAttributeValue AttributeValue;
+		AttributeValue.Tag = Entry.AttrTag;
+		AttributeValue.Max = Entry.MaxValue;
+		AttributeValue.Current = Entry.StartValue;
+		LoadedAttributes.Add(Entry.AttrTag, AttributeValue);
+
+		if (Entry.AttrTag == StaminaTag && Entry.bUseStaminaRules)
 		{
-			OutError = FString::Printf(
-				TEXT("StatusLibrary not found for SystemId '%s': %s. Recommendation: create a UOmniStatusLibrary asset and assign it in profile '%s'."),
-				*RuntimeSystemId.ToString(),
-				*StatusLibraryPath.ToString(),
-				*GetNameSafe(LoadedProfile)
-			);
-			return false;
-		}
-		if (!Cast<UOmniStatusLibrary>(LoadedLibraryObject))
-		{
-			OutError = FString::Printf(
-				TEXT("StatusLibrary type mismatch for SystemId '%s': %s is '%s' (expected UOmniStatusLibrary)."),
-				*RuntimeSystemId.ToString(),
-				*StatusLibraryPath.ToString(),
-				*LoadedLibraryObject->GetClass()->GetPathName()
-			);
-			return false;
+			LoadedStaminaRules = Entry.StaminaRules;
 		}
 	}
 
-	FOmniStatusSettings LoadedSettings;
-	if (!LoadedProfile->ResolveSettings(LoadedSettings))
+	if (!LoadedAttributes.Contains(HpTag) || !LoadedAttributes.Contains(StaminaTag))
 	{
-		OutError = FString::Printf(
-			TEXT("Status profile '%s' has no usable configuration for SystemId '%s'. Recommendation: configure StatusLibrary and valid settings."),
-			*GetNameSafe(LoadedProfile),
-			*RuntimeSystemId.ToString()
-		);
+		OutError = TEXT("Recipe precisa definir Game.Attr.HP e Game.Attr.Stamina.");
 		return false;
 	}
 
-	FString ValidationError;
-	if (!LoadedSettings.IsValid(ValidationError))
+	FString RulesValidationError;
+	if (!LoadedStaminaRules.IsValid(LoadedAttributes[StaminaTag].Max, RulesValidationError))
 	{
-		OutError = FString::Printf(
-			TEXT("Status settings invalid for SystemId '%s' in profile '%s': %s"),
-			*RuntimeSystemId.ToString(),
-			*GetNameSafe(LoadedProfile),
-			*ValidationError
-		);
+		OutError = FString::Printf(TEXT("Stamina rules invalidas no recipe: %s"), *RulesValidationError);
 		return false;
 	}
 
-	RuntimeSettings = MoveTemp(LoadedSettings);
-	if (bLoadedFromAssetPath)
-	{
-		UE_LOG(
-			LogOmniStatusSystem,
-			Log,
-			TEXT("[Omni][Status][Config] Settings carregados de profile: %s"),
-			*GetNameSafe(LoadedProfile)
-		);
-	}
-	else
-	{
-		OutError = FString::Printf(
-			TEXT("Status settings for SystemId '%s' were not loaded from an asset-backed profile."),
-			*RuntimeSystemId.ToString()
-		);
-		return false;
-	}
+	AttributesByTag = MoveTemp(LoadedAttributes);
+	StaminaRules = LoadedStaminaRules;
 
-	OutError.Reset();
+	UE_LOG(
+		LogOmniStatusSystem,
+		Log,
+		TEXT("[Omni][Attributes][Config] Recipe carregada | path=%s hp=%.1f/%.1f stamina=%.1f/%.1f"),
+		*RecipeAssetPath.ToString(),
+		AttributesByTag[HpTag].Current,
+		AttributesByTag[HpTag].Max,
+		AttributesByTag[StaminaTag].Current,
+		AttributesByTag[StaminaTag].Max
+	);
+
 	return true;
+}
+
+void UOmniStatusSystem::ApplyFallbackRecipe()
+{
+	AttributesByTag.Reset();
+
+	FOmniAttributeValue HpValue;
+	HpValue.Tag = HpTag;
+	HpValue.Max = 100.0f;
+	HpValue.Current = 100.0f;
+	AttributesByTag.Add(HpTag, HpValue);
+
+	FOmniAttributeValue StaminaValue;
+	StaminaValue.Tag = StaminaTag;
+	StaminaValue.Max = 100.0f;
+	StaminaValue.Current = 100.0f;
+	AttributesByTag.Add(StaminaTag, StaminaValue);
+
+	StaminaRules = FOmniStaminaRules();
+}
+
+void UOmniStatusSystem::ResolveOfficialTags()
+{
+	HpTag = FGameplayTag::RequestGameplayTag(OmniStatus::HpTagName, false);
+	StaminaTag = FGameplayTag::RequestGameplayTag(OmniStatus::StaminaTagName, false);
+	SprintingStateTag = FGameplayTag::RequestGameplayTag(OmniStatus::SprintingStateTagName, false);
+	ExhaustedStateTag = FGameplayTag::RequestGameplayTag(OmniStatus::ExhaustedStateTagName, false);
+	if (!ExhaustedStateTag.IsValid())
+	{
+		ExhaustedStateTag = FGameplayTag::RequestGameplayTag(TEXT("State.Exhausted"), false);
+	}
+}
+
+void UOmniStatusSystem::InitializeSnapshot()
+{
+	if (const FOmniAttributeValue* HpValue = FindAttribute(HpTag))
+	{
+		Snapshot.HP = *HpValue;
+	}
+	else
+	{
+		Snapshot.HP = FOmniAttributeValue();
+		Snapshot.HP.Tag = HpTag;
+	}
+
+	if (const FOmniAttributeValue* StaminaValue = FindAttribute(StaminaTag))
+	{
+		Snapshot.Stamina = *StaminaValue;
+	}
+	else
+	{
+		Snapshot.Stamina = FOmniAttributeValue();
+		Snapshot.Stamina.Tag = StaminaTag;
+	}
+
+	Snapshot.bExhausted = bExhausted;
+}
+
+bool UOmniStatusSystem::ResolveClockDelta(float& OutDeltaTime)
+{
+	OutDeltaTime = 0.0f;
+	if (!ClockSubsystem.IsValid())
+	{
+		return false;
+	}
+
+	const double CurrentClockSeconds = ClockSubsystem->GetSimTime();
+	const double RawDelta = CurrentClockSeconds - LastClockSeconds;
+	LastClockSeconds = CurrentClockSeconds;
+	OutDeltaTime = FMath::Max(0.0f, static_cast<float>(RawDelta));
+	return true;
+}
+
+void UOmniStatusSystem::TickStamina(const float DeltaTime)
+{
+	FOmniAttributeValue* StaminaAttribute = FindAttributeMutable(StaminaTag);
+	if (!StaminaAttribute)
+	{
+		return;
+	}
+
+	const bool bSprinting = SprintingStateTag.IsValid() && ContextTags.HasTagExact(SprintingStateTag);
+	if (bSprinting)
+	{
+		StaminaAttribute->Current -= StaminaRules.DrainPerSecond * DeltaTime;
+		TimeSinceLastStaminaDrain = 0.0f;
+	}
+	else
+	{
+		TimeSinceLastStaminaDrain += DeltaTime;
+		if (TimeSinceLastStaminaDrain >= StaminaRules.RegenDelaySeconds)
+		{
+			StaminaAttribute->Current += StaminaRules.RegenPerSecond * DeltaTime;
+		}
+	}
+
+	ClampAttribute(*StaminaAttribute);
+	if (!bExhausted && StaminaAttribute->Current <= StaminaRules.ExhaustedThreshold)
+	{
+		SetExhausted(true);
+	}
+	else if (bExhausted && StaminaAttribute->Current >= StaminaRules.RecoverThreshold)
+	{
+		SetExhausted(false);
+	}
+}
+
+FOmniAttributeValue* UOmniStatusSystem::FindAttributeMutable(const FGameplayTag AttributeTag)
+{
+	return AttributesByTag.Find(AttributeTag);
+}
+
+const FOmniAttributeValue* UOmniStatusSystem::FindAttribute(const FGameplayTag AttributeTag) const
+{
+	return AttributesByTag.Find(AttributeTag);
+}
+
+void UOmniStatusSystem::ClampAttribute(FOmniAttributeValue& Attribute) const
+{
+	Attribute.Max = FMath::Max(0.0f, Attribute.Max);
+	Attribute.Current = FMath::Clamp(Attribute.Current, 0.0f, Attribute.Max);
+}
+
+void UOmniStatusSystem::SetExhausted(const bool bInExhausted)
+{
+	if (bExhausted == bInExhausted)
+	{
+		return;
+	}
+
+	bExhausted = bInExhausted;
+	UpdateStateTags();
+
+	if (!Registry.IsValid())
+	{
+		return;
+	}
+
+	if (bExhausted)
+	{
+		FOmniExhaustedEventSchema EventSchema;
+		EventSchema.SourceSystem = OmniStatus::SystemId;
+		Registry->BroadcastEvent(FOmniExhaustedEventSchema::ToMessage(EventSchema));
+		UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Attributes] Game.State.Exhausted = True"));
+		if (DebugSubsystem.IsValid())
+		{
+			DebugSubsystem->LogWarning(OmniStatus::CategoryName, TEXT("Game.State.Exhausted = True"), OmniStatus::SourceName);
+		}
+	}
+	else
+	{
+		FOmniExhaustedClearedEventSchema EventSchema;
+		EventSchema.SourceSystem = OmniStatus::SystemId;
+		Registry->BroadcastEvent(FOmniExhaustedClearedEventSchema::ToMessage(EventSchema));
+		UE_LOG(LogOmniStatusSystem, Log, TEXT("[Omni][Attributes] Game.State.Exhausted = False"));
+		if (DebugSubsystem.IsValid())
+		{
+			DebugSubsystem->LogEvent(OmniStatus::CategoryName, TEXT("Game.State.Exhausted = False"), OmniStatus::SourceName);
+		}
+	}
 }
 
 void UOmniStatusSystem::UpdateStateTags()
 {
-	StateTags.Reset();
-	if (bExhausted && ExhaustedTag.IsValid())
+	StateTags = ContextTags;
+	if (bExhausted && ExhaustedStateTag.IsValid())
 	{
-		StateTags.AddTag(ExhaustedTag);
+		StateTags.AddTag(ExhaustedStateTag);
 	}
 }
 
@@ -548,7 +709,11 @@ void UOmniStatusSystem::PublishTelemetry()
 		return;
 	}
 
-	DebugSubsystem->SetMetric(TEXT("Status.Stamina"), FString::Printf(TEXT("%.1f/%.1f"), CurrentStamina, RuntimeSettings.MaxStamina));
-	DebugSubsystem->SetMetric(TEXT("Status.Exhausted"), bExhausted ? TEXT("True") : TEXT("False"));
-	DebugSubsystem->SetMetric(TEXT("Status.Sprinting"), bSprinting ? TEXT("True") : TEXT("False"));
+	DebugSubsystem->SetMetric(TEXT("Status.HP"), FString::Printf(TEXT("%.1f/%.1f"), Snapshot.HP.Current, Snapshot.HP.Max));
+	DebugSubsystem->SetMetric(TEXT("Status.Stamina"), FString::Printf(TEXT("%.1f/%.1f"), Snapshot.Stamina.Current, Snapshot.Stamina.Max));
+	DebugSubsystem->SetMetric(TEXT("Status.Exhausted"), Snapshot.bExhausted ? TEXT("True") : TEXT("False"));
+	DebugSubsystem->SetMetric(
+		TEXT("Status.Sprinting"),
+		(SprintingStateTag.IsValid() && ContextTags.HasTagExact(SprintingStateTag)) ? TEXT("True") : TEXT("False")
+	);
 }

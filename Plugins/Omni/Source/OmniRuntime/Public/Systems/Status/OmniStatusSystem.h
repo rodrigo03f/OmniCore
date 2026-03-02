@@ -2,31 +2,33 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
-#include "Systems/Status/OmniStatusData.h"
+#include "Systems/Attributes/OmniAttributeTypes.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniStatusSystem.generated.h"
 
 class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
+class UOmniClockSubsystem;
+class UOmniAttributesRecipeDataAsset;
 
 // Purpose:
-// - Manter estado de status do ator (stamina, exhausted e state tags).
-// - Processar consumo/regeneracao de stamina conforme config de profile.
+// - Manter atributos essenciais (HP/Stamina) de forma deterministica.
+// - Processar loop de stamina (drain/regen/exhausted) via tags de contexto.
 // - Responder queries de estado para outros systems.
 // Inputs:
-// - Config de status (Manifest -> StatusProfile).
-// - Commands/Events de systems (ex.: sprint start/stop).
-// - Tick do runtime para evolucao temporal.
+// - Recipe de atributos via config (DefaultGame.ini).
+// - Commands de systems (ex.: SetSprinting) e console (damage/heal).
+// - Tempo de simulacao via OmniClock.
 // Outputs:
-// - Valores de stamina/exhausted para consultas.
-// - Gameplay tags de estado (ex.: exhausted).
+// - Snapshot de atributos (HP/Stamina/Exhausted).
+// - Gameplay tags de estado (Game.State.Exhausted).
 // - Telemetria de debug.
 // Determinism:
-// - Evolucao de estado depende apenas de config + tick/runtime messages.
-// - Sem uso de random ou fontes de tempo externas no caminho normal.
+// - Evolucao de estado depende de recipe + tags + OmniClock.
+// - Sem uso de tempo de mundo no fluxo normal.
 // Failure modes:
-// - Profile invalido/ausente => fail-fast com mensagem acionavel.
+// - Recipe invalida/ausente => fallback deterministico com log acionavel.
 // - Payload invalido em command/query/event e rejeitado pelo contrato.
 UCLASS()
 class OMNIRUNTIME_API UOmniStatusSystem : public UOmniRuntimeSystem
@@ -43,6 +45,9 @@ public:
 	virtual bool HandleCommand_Implementation(const FOmniCommandMessage& Command) override;
 	virtual bool HandleQuery_Implementation(FOmniQueryMessage& Query) override;
 	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
+
+	UFUNCTION(BlueprintPure, Category = "Omni|Attributes")
+	FOmniAttributeSnapshot GetSnapshot() const;
 
 	UFUNCTION(BlueprintPure, Category = "Omni|Status")
 	float GetCurrentStamina() const;
@@ -67,36 +72,69 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
 	void AddStamina(float Amount);
 
+	UFUNCTION(BlueprintCallable, Category = "Omni|Attributes")
+	void ApplyDamage(float Amount);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|Attributes")
+	void ApplyHeal(float Amount);
+
 private:
-	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, FString& OutError);
+	bool TryLoadRecipeFromConfig(FString& OutError);
+	void ApplyFallbackRecipe();
+	void ResolveOfficialTags();
+	void InitializeSnapshot();
+	bool ResolveClockDelta(float& OutDeltaTime);
+	void TickStamina(const float DeltaTime);
+	FOmniAttributeValue* FindAttributeMutable(FGameplayTag AttributeTag);
+	const FOmniAttributeValue* FindAttribute(FGameplayTag AttributeTag) const;
+	void ClampAttribute(FOmniAttributeValue& Attribute) const;
+	void SetExhausted(bool bInExhausted);
 	void UpdateStateTags();
 	void PublishTelemetry();
 
 private:
-	UPROPERTY(Transient)
-	FOmniStatusSettings RuntimeSettings;
+	// Core deterministic state map consumed by HUD/debug/query.
+	TMap<FGameplayTag, FOmniAttributeValue> AttributesByTag;
 
 	UPROPERTY(Transient)
-	float CurrentStamina = 0.0f;
+	FOmniStaminaRules StaminaRules;
 
 	UPROPERTY(Transient)
-	bool bSprinting = false;
+	FOmniAttributeSnapshot Snapshot;
 
 	UPROPERTY(Transient)
-	bool bExhausted = false;
-
-	UPROPERTY(Transient)
-	float TimeSinceLastConsumption = 0.0f;
+	FGameplayTagContainer ContextTags;
 
 	UPROPERTY(Transient)
 	FGameplayTagContainer StateTags;
 
 	UPROPERTY(Transient)
-	FGameplayTag ExhaustedTag;
+	bool bExhausted = false;
+
+	UPROPERTY(Transient)
+	double LastClockSeconds = 0.0;
+
+	UPROPERTY(Transient)
+	float TimeSinceLastStaminaDrain = 0.0f;
+
+	UPROPERTY(Transient)
+	FGameplayTag HpTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag StaminaTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag SprintingStateTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag ExhaustedStateTag;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniDebugSubsystem> DebugSubsystem;
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UOmniClockSubsystem> ClockSubsystem;
 };
