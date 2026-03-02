@@ -1,7 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "Systems/Movement/OmniMovementData.h"
+#include "Systems/ActionGate/OmniGateTypes.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniMovementSystem.generated.h"
 
@@ -9,6 +11,7 @@ class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
 class UOmniClockSubsystem;
+class UCharacterMovementComponent;
 
 // Purpose:
 // - Orquestrar estado de sprint no runtime usando dados de profile.
@@ -24,7 +27,7 @@ class UOmniClockSubsystem;
 // - Telemetria de debug.
 // Determinism:
 // - Fluxo normal usa OmniClock como fonte unica de tempo.
-// - Nao depende de WorldTime no caminho normal.
+// - Nao depende de tempo do mundo no caminho normal.
 // Failure modes:
 // - Sem profile valido ou sem OmniClock => fail-fast na inicializacao.
 // - Sprint negado por regras de status/action gate gera motivo explicito.
@@ -58,19 +61,27 @@ public:
 	bool IsSprinting() const;
 
 	UFUNCTION(BlueprintPure, Category = "Omni|Movement")
+	FGameplayTagContainer GetMovementTags() const;
+
+	UFUNCTION(BlueprintPure, Category = "Omni|Movement")
 	float GetAutoSprintRemainingSeconds() const;
 
 private:
 	bool TryLoadSettingsFromManifest(const UOmniManifest* Manifest, bool bAllowDevDefaults, FString& OutError);
+	void ApplyConfigOverrides();
 	void StartSprinting();
 	void StopSprinting(FName Reason);
+	void SetMovementMode(EOmniMovementMode NewMode, FName Reason);
+	void RefreshModeTags();
+	void UpdateEffectiveSpeed();
 	void PublishTelemetry() const;
 	double GetNowSeconds() const;
 	bool QueryStatusIsExhausted() const;
 	void DispatchStatusSprinting(bool bSprinting) const;
-	bool QueryCanStartSprint(FString* OutReason = nullptr) const;
+	FOmniGateDecision QueryCanStartSprint() const;
 	bool DispatchStartSprint() const;
 	bool DispatchStopSprint(FName Reason) const;
+	UCharacterMovementComponent* ResolveCharacterMovementComponent() const;
 
 private:
 	UPROPERTY(Transient)
@@ -83,7 +94,13 @@ private:
 	bool bIsSprinting = false;
 
 	UPROPERTY(Transient)
-	float NextStartAttemptWorldTime = 0.0f;
+	EOmniMovementMode MovementMode = EOmniMovementMode::Walk;
+
+	UPROPERTY(Transient)
+	FGameplayTagContainer MovementTags;
+
+	UPROPERTY(Transient)
+	float NextStartAttemptSimTime = 0.0f;
 
 	UPROPERTY(Transient)
 	float AutoSprintRemainingSeconds = 0.0f;
@@ -93,6 +110,24 @@ private:
 
 	UPROPERTY(Transient)
 	bool bObservedSprintEndedEvent = false;
+
+	UPROPERTY(Transient)
+	float CachedBaseSpeed = 0.0f;
+
+	UPROPERTY(Transient)
+	bool bBaseSpeedCaptured = false;
+
+	UPROPERTY(Transient)
+	FGameplayTag IntentSprintRequestedTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag ModeWalkTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag ModeSprintTag;
+
+	UPROPERTY(Transient)
+	FGameplayTag StateSprintingTag;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;

@@ -3,6 +3,8 @@
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "Library/OmniMovementLibrary.h"
@@ -34,12 +36,19 @@ namespace OmniMovement
 	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
 	static const FName EventOnActionDenied(TEXT("OnActionDenied"));
 	static const FName EventPayloadActionId(TEXT("ActionId"));
-	static const FName EventPayloadReason(TEXT("Reason"));
+	static const FName EventPayloadReasonTag(TEXT("ReasonTag"));
+	static const FName EventPayloadReasonText(TEXT("ReasonText"));
 	static const FName EventPayloadEndReason(TEXT("EndReason"));
 	static const FName ManifestSettingMovementProfileAssetPath(TEXT("MovementProfileAssetPath"));
 	static const FName ManifestSettingMovementProfileClassPath(TEXT("MovementProfileClassPath"));
+	static const FName ConfigSectionMovement(TEXT("Omni.Movement"));
+	static const FName ConfigKeySprintMultiplier(TEXT("SprintMultiplier"));
 	static const TCHAR* DefaultMovementProfileAssetPath = TEXT("/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default");
 	static const FName DebugMetricProfileMovement(TEXT("Omni.Profile.Movement"));
+	static const FName IntentSprintRequestedTagName(TEXT("Game.Movement.Intent.SprintRequested"));
+	static const FName ModeWalkTagName(TEXT("Game.Movement.Mode.Walk"));
+	static const FName ModeSprintTagName(TEXT("Game.Movement.Mode.Sprint"));
+	static const FName StateSprintingTagName(TEXT("Game.State.Sprinting"));
 }
 
 FName UOmniMovementSystem::GetSystemId_Implementation() const
@@ -110,13 +119,24 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 		}
 		return;
 	}
+	ApplyConfigOverrides();
+
+	IntentSprintRequestedTag = FGameplayTag::RequestGameplayTag(OmniMovement::IntentSprintRequestedTagName, false);
+	ModeWalkTag = FGameplayTag::RequestGameplayTag(OmniMovement::ModeWalkTagName, false);
+	ModeSprintTag = FGameplayTag::RequestGameplayTag(OmniMovement::ModeSprintTagName, false);
+	StateSprintingTag = FGameplayTag::RequestGameplayTag(OmniMovement::StateSprintingTagName, false);
 
 	bSprintRequested = false;
 	bIsSprinting = false;
-	NextStartAttemptWorldTime = 0.0f;
+	MovementMode = EOmniMovementMode::Walk;
+	NextStartAttemptSimTime = 0.0f;
 	AutoSprintRemainingSeconds = 0.0f;
 	bObservedSprintStartedEvent = false;
 	bObservedSprintEndedEvent = false;
+	CachedBaseSpeed = 0.0f;
+	bBaseSpeedCaptured = false;
+	RefreshModeTags();
+	UpdateEffectiveSpeed();
 	PublishTelemetry();
 	SetInitializationResult(true);
 	if (DebugSubsystem.IsValid())
@@ -130,6 +150,10 @@ void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextO
 void UOmniMovementSystem::ShutdownSystem_Implementation()
 {
 	StopSprinting(TEXT("Shutdown"));
+	SetMovementMode(EOmniMovementMode::Walk, TEXT("Shutdown"));
+	MovementTags.Reset();
+	CachedBaseSpeed = 0.0f;
+	bBaseSpeedCaptured = false;
 	bObservedSprintStartedEvent = false;
 	bObservedSprintEndedEvent = false;
 
@@ -137,6 +161,8 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 	{
 		DebugSubsystem->RemoveMetric(TEXT("Movement.SprintRequested"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.IsSprinting"));
+		DebugSubsystem->RemoveMetric(TEXT("Movement.Mode"));
+		DebugSubsystem->RemoveMetric(TEXT("Movement.SprintMultiplier"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.AutoSprintRemaining"));
 		DebugSubsystem->RemoveMetric(OmniMovement::DebugMetricProfileMovement);
 		DebugSubsystem->LogEvent(OmniMovement::CategoryName, TEXT("Movement finalizado"), OmniMovement::SourceName);
@@ -161,7 +187,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		return;
 	}
 
-	const double WorldTime = GetNowSeconds();
+	const double SimTime = GetNowSeconds();
 
 	if (RuntimeSettings.bUseKeyboardShiftAsSprintRequest)
 	{
@@ -191,7 +217,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		}
 	}
 
-	if (bSprintRequested && !bIsSprinting && WorldTime >= NextStartAttemptWorldTime)
+	if (bSprintRequested && !bIsSprinting && SimTime >= NextStartAttemptSimTime)
 	{
 		StartSprinting();
 	}
@@ -204,6 +230,15 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 	if (bIsSprinting && QueryStatusIsExhausted())
 	{
 		StopSprinting(TEXT("Exhausted"));
+	}
+
+	if (bIsSprinting)
+	{
+		const FOmniGateDecision Decision = QueryCanStartSprint();
+		if (!Decision.bAllowed)
+		{
+			StopSprinting(TEXT("GateDenied"));
+		}
 	}
 
 #if !UE_BUILD_SHIPPING
@@ -229,6 +264,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 
 	bObservedSprintStartedEvent = false;
 	bObservedSprintEndedEvent = false;
+	UpdateEffectiveSpeed();
 	PublishTelemetry();
 }
 
@@ -276,8 +312,13 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		return;
 	}
 
-	FString ReasonValue;
-	Event.TryGetPayloadValue(OmniMovement::EventPayloadReason, ReasonValue);
+	FString ReasonTagValue;
+	if (!Event.TryGetPayloadValue(OmniMovement::EventPayloadReasonTag, ReasonTagValue))
+	{
+		Event.TryGetPayloadValue(TEXT("Reason"), ReasonTagValue);
+	}
+	FString ReasonTextValue;
+	Event.TryGetPayloadValue(OmniMovement::EventPayloadReasonText, ReasonTextValue);
 
 	if (Event.EventName == OmniMovement::EventOnActionStarted)
 	{
@@ -315,9 +356,10 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 		UE_LOG(
 			LogOmniMovementSystem,
 			Warning,
-			TEXT("[Omni][Movement][Events] OnActionDenied | actionId=%s reason=%s requested=%s sprinting=%s"),
+			TEXT("[Omni][Movement][Events] OnActionDenied | actionId=%s reasonTag=%s reasonText=%s requested=%s sprinting=%s"),
 			*ActionId.ToString(),
-			ReasonValue.IsEmpty() ? TEXT("<none>") : *ReasonValue,
+			ReasonTagValue.IsEmpty() ? TEXT("<none>") : *ReasonTagValue,
+			ReasonTextValue.IsEmpty() ? TEXT("<none>") : *ReasonTextValue,
 			bSprintRequested ? TEXT("True") : TEXT("False"),
 			bIsSprinting ? TEXT("True") : TEXT("False")
 		);
@@ -335,6 +377,17 @@ void UOmniMovementSystem::SetSprintRequested(const bool bRequested)
 	if (!bSprintRequested)
 	{
 		AutoSprintRemainingSeconds = 0.0f;
+	}
+	if (IntentSprintRequestedTag.IsValid())
+	{
+		if (bSprintRequested)
+		{
+			MovementTags.AddTag(IntentSprintRequestedTag);
+		}
+		else
+		{
+			MovementTags.RemoveTag(IntentSprintRequestedTag);
+		}
 	}
 
 	PublishTelemetry();
@@ -364,6 +417,11 @@ bool UOmniMovementSystem::IsSprinting() const
 	return bIsSprinting;
 }
 
+FGameplayTagContainer UOmniMovementSystem::GetMovementTags() const
+{
+	return MovementTags;
+}
+
 float UOmniMovementSystem::GetAutoSprintRemainingSeconds() const
 {
 	return AutoSprintRemainingSeconds;
@@ -371,22 +429,21 @@ float UOmniMovementSystem::GetAutoSprintRemainingSeconds() const
 
 void UOmniMovementSystem::StartSprinting()
 {
-	FString DenyReason;
-	if (!QueryCanStartSprint(&DenyReason))
+	const FOmniGateDecision Decision = QueryCanStartSprint();
+	if (!Decision.bAllowed)
 	{
-		NextStartAttemptWorldTime = GetNowSeconds() + RuntimeSettings.FailedRetryIntervalSeconds;
+		NextStartAttemptSimTime = GetNowSeconds() + RuntimeSettings.FailedRetryIntervalSeconds;
 		return;
 	}
 
 	if (!DispatchStartSprint())
 	{
-		NextStartAttemptWorldTime = GetNowSeconds() + RuntimeSettings.FailedRetryIntervalSeconds;
+		NextStartAttemptSimTime = GetNowSeconds() + RuntimeSettings.FailedRetryIntervalSeconds;
 		return;
 	}
 
-	bIsSprinting = true;
-	NextStartAttemptWorldTime = 0.0f;
-	DispatchStatusSprinting(true);
+	SetMovementMode(EOmniMovementMode::Sprint, TEXT("Start"));
+	NextStartAttemptSimTime = 0.0f;
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -398,13 +455,12 @@ void UOmniMovementSystem::StopSprinting(const FName Reason)
 {
 	if (!bIsSprinting)
 	{
-		DispatchStatusSprinting(false);
+		SetMovementMode(EOmniMovementMode::Walk, Reason);
 		return;
 	}
 
 	DispatchStopSprint(Reason);
-	bIsSprinting = false;
-	DispatchStatusSprinting(false);
+	SetMovementMode(EOmniMovementMode::Walk, Reason);
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -417,6 +473,85 @@ void UOmniMovementSystem::StopSprinting(const FName Reason)
 	}
 }
 
+void UOmniMovementSystem::SetMovementMode(const EOmniMovementMode NewMode, const FName Reason)
+{
+	const bool bChanged = MovementMode != NewMode;
+	MovementMode = NewMode;
+	bIsSprinting = MovementMode == EOmniMovementMode::Sprint;
+	RefreshModeTags();
+	DispatchStatusSprinting(bIsSprinting);
+	UpdateEffectiveSpeed();
+
+	if (bChanged && DebugSubsystem.IsValid())
+	{
+		const FString ModeText = bIsSprinting ? TEXT("Sprint") : TEXT("Walk");
+		const FString ReasonText = Reason == NAME_None ? TEXT("Unknown") : Reason.ToString();
+		DebugSubsystem->LogEvent(
+			OmniMovement::CategoryName,
+			FString::Printf(TEXT("Mode -> %s (%s)"), *ModeText, *ReasonText),
+			OmniMovement::SourceName
+		);
+	}
+}
+
+void UOmniMovementSystem::RefreshModeTags()
+{
+	if (ModeWalkTag.IsValid())
+	{
+		MovementTags.RemoveTag(ModeWalkTag);
+	}
+	if (ModeSprintTag.IsValid())
+	{
+		MovementTags.RemoveTag(ModeSprintTag);
+	}
+	if (StateSprintingTag.IsValid())
+	{
+		MovementTags.RemoveTag(StateSprintingTag);
+	}
+
+	if (MovementMode == EOmniMovementMode::Sprint)
+	{
+		if (ModeSprintTag.IsValid())
+		{
+			MovementTags.AddTag(ModeSprintTag);
+		}
+		if (StateSprintingTag.IsValid())
+		{
+			MovementTags.AddTag(StateSprintingTag);
+		}
+	}
+	else
+	{
+		if (ModeWalkTag.IsValid())
+		{
+			MovementTags.AddTag(ModeWalkTag);
+		}
+	}
+}
+
+void UOmniMovementSystem::UpdateEffectiveSpeed()
+{
+	UCharacterMovementComponent* CharacterMovement = ResolveCharacterMovementComponent();
+	if (!CharacterMovement)
+	{
+		return;
+	}
+
+	if (!bBaseSpeedCaptured || (MovementMode == EOmniMovementMode::Walk && CharacterMovement->MaxWalkSpeed > 0.0f))
+	{
+		CachedBaseSpeed = CharacterMovement->MaxWalkSpeed;
+		bBaseSpeedCaptured = CachedBaseSpeed > 0.0f;
+	}
+
+	if (!bBaseSpeedCaptured)
+	{
+		return;
+	}
+
+	const float ModeMultiplier = MovementMode == EOmniMovementMode::Sprint ? RuntimeSettings.SprintMultiplier : 1.0f;
+	CharacterMovement->MaxWalkSpeed = CachedBaseSpeed * ModeMultiplier;
+}
+
 void UOmniMovementSystem::PublishTelemetry() const
 {
 	if (!DebugSubsystem.IsValid())
@@ -426,6 +561,8 @@ void UOmniMovementSystem::PublishTelemetry() const
 
 	DebugSubsystem->SetMetric(TEXT("Movement.SprintRequested"), bSprintRequested ? TEXT("True") : TEXT("False"));
 	DebugSubsystem->SetMetric(TEXT("Movement.IsSprinting"), bIsSprinting ? TEXT("True") : TEXT("False"));
+	DebugSubsystem->SetMetric(TEXT("Movement.Mode"), MovementMode == EOmniMovementMode::Sprint ? TEXT("Sprint") : TEXT("Walk"));
+	DebugSubsystem->SetMetric(TEXT("Movement.SprintMultiplier"), FString::Printf(TEXT("%.2f"), RuntimeSettings.SprintMultiplier));
 	DebugSubsystem->SetMetric(TEXT("Movement.AutoSprintRemaining"), FString::Printf(TEXT("%.1fs"), AutoSprintRemainingSeconds));
 }
 
@@ -650,6 +787,20 @@ bool UOmniMovementSystem::TryLoadSettingsFromManifest(
 	return true;
 }
 
+void UOmniMovementSystem::ApplyConfigOverrides()
+{
+	float SprintMultiplierFromConfig = RuntimeSettings.SprintMultiplier;
+	if (GConfig->GetFloat(
+		*OmniMovement::ConfigSectionMovement.ToString(),
+		*OmniMovement::ConfigKeySprintMultiplier.ToString(),
+		SprintMultiplierFromConfig,
+		GGameIni
+	))
+	{
+		RuntimeSettings.SprintMultiplier = FMath::Max(1.0f, SprintMultiplierFromConfig);
+	}
+}
+
 double UOmniMovementSystem::GetNowSeconds() const
 {
 	return ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : 0.0;
@@ -694,11 +845,16 @@ void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const
 	Registry->DispatchCommand(FOmniSetSprintingCommandSchema::ToMessage(CommandSchema));
 }
 
-bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
+FOmniGateDecision UOmniMovementSystem::QueryCanStartSprint() const
 {
+	FOmniGateDecision Decision;
+	Decision.ReasonTag = FGameplayTag::RequestGameplayTag(TEXT("Omni.Gate.Deny.Locked"), false);
+
 	if (!Registry.IsValid())
 	{
-		return false;
+		Decision.bAllowed = false;
+		Decision.ReasonText = TEXT("Registry indisponivel.");
+		return Decision;
 	}
 
 	FOmniCanStartActionQuerySchema RequestSchema;
@@ -709,30 +865,26 @@ bool UOmniMovementSystem::QueryCanStartSprint(FString* OutReason) const
 	const bool bHandled = Registry->ExecuteQuery(Query);
 	if (!bHandled)
 	{
-		return false;
+		Decision.bAllowed = false;
+		Decision.ReasonText = TEXT("Query CanStartAction nao foi tratada.");
+		return Decision;
 	}
 
 	FOmniCanStartActionQuerySchema ResponseSchema;
 	FString ParseError;
 	if (!FOmniCanStartActionQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
 	{
-		return false;
+		Decision.bAllowed = false;
+		Decision.ReasonText = ParseError.IsEmpty() ? TEXT("Falha ao parsear resposta do ActionGate.") : ParseError;
+		return Decision;
 	}
 
-	if (OutReason)
-	{
-		const FString ReasonTagText = ResponseSchema.ReasonTag.IsValid() ? ResponseSchema.ReasonTag.ToString() : TEXT("Omni.Gate.Deny.Locked");
-		if (ResponseSchema.ReasonText.IsEmpty())
-		{
-			*OutReason = ReasonTagText;
-		}
-		else
-		{
-			*OutReason = FString::Printf(TEXT("%s (%s)"), *ReasonTagText, *ResponseSchema.ReasonText);
-		}
-	}
-
-	return ResponseSchema.bAllowed;
+	Decision.bAllowed = ResponseSchema.bAllowed;
+	Decision.ReasonTag = ResponseSchema.ReasonTag.IsValid()
+		? ResponseSchema.ReasonTag
+		: FGameplayTag::RequestGameplayTag(TEXT("Omni.Gate.Deny.Locked"), false);
+	Decision.ReasonText = ResponseSchema.ReasonText;
+	return Decision;
 }
 
 bool UOmniMovementSystem::DispatchStartSprint() const
@@ -760,4 +912,32 @@ bool UOmniMovementSystem::DispatchStopSprint(const FName Reason) const
 	CommandSchema.ActionId = RuntimeSettings.SprintActionId;
 	CommandSchema.Reason = Reason;
 	return Registry->DispatchCommand(FOmniStopActionCommandSchema::ToMessage(CommandSchema));
+}
+
+UCharacterMovementComponent* UOmniMovementSystem::ResolveCharacterMovementComponent() const
+{
+	if (!Registry.IsValid())
+	{
+		return nullptr;
+	}
+
+	UGameInstance* GameInstance = Registry->GetGameInstance();
+	if (!GameInstance)
+	{
+		return nullptr;
+	}
+
+	APlayerController* PlayerController = GameInstance->GetFirstLocalPlayerController();
+	if (!PlayerController)
+	{
+		return nullptr;
+	}
+
+	ACharacter* Character = Cast<ACharacter>(PlayerController->GetPawn());
+	if (!Character)
+	{
+		return nullptr;
+	}
+
+	return Character->GetCharacterMovement();
 }

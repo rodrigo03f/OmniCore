@@ -1018,6 +1018,14 @@ FOmniGateDecision UOmniActionGateSystem::EvaluateStartAction(const FName ActionI
 	const bool bAlreadyActive = ActiveActions.Contains(ActionId);
 	if (bAlreadyActive)
 	{
+		if (!bApplyChanges)
+		{
+			Decision.bAllowed = true;
+			Decision.ReasonTag = AllowReasonTag;
+			Decision.ReasonText = TEXT("Acao ja ativa (maintain).");
+			return Decision;
+		}
+
 		if (Definition->Policy == EOmniActionPolicy::DenyIfActive)
 		{
 			Decision.bAllowed = false;
