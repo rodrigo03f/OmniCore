@@ -291,14 +291,17 @@ namespace OmniRuntimeConsole
 			[&StatusCount](UOmniStatusSystem* StatusSystem)
 			{
 				++StatusCount;
+				const FOmniAttributeSnapshot Snapshot = StatusSystem->GetSnapshot();
 				UE_LOG(
 					LogOmniRuntime,
 					Log,
-					TEXT("[Omni][Runtime][Console] Status[%d] stamina=%.1f/%.1f exhausted=%s"),
+					TEXT("[Omni][Runtime][Console] Attributes[%d] hp=%.1f/%.1f stamina=%.1f/%.1f exhausted=%s"),
 					StatusCount,
-					StatusSystem->GetCurrentStamina(),
-					StatusSystem->GetMaxStamina(),
-					StatusSystem->IsExhausted() ? TEXT("True") : TEXT("False")
+					Snapshot.HP.Current,
+					Snapshot.HP.Max,
+					Snapshot.Stamina.Current,
+					Snapshot.Stamina.Max,
+					Snapshot.bExhausted ? TEXT("True") : TEXT("False")
 				);
 			}
 		);
@@ -311,6 +314,58 @@ namespace OmniRuntimeConsole
 				TEXT("[Omni][Runtime][Console] Nenhum StatusSystem encontrado | Verifique Registry inicializado e Manifest configurado")
 			);
 		}
+	}
+
+	static void HandleOmniDamageCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		float Amount = 10.0f;
+		if (Args.Num() > 0)
+		{
+			LexFromString(Amount, *Args[0]);
+		}
+		Amount = FMath::Max(0.0f, Amount);
+
+		const int32 AffectedSystems = ForEachStatusSystem(
+			[Amount](UOmniStatusSystem* StatusSystem)
+			{
+				StatusSystem->ApplyDamage(Amount);
+			}
+		);
+		UE_LOG(
+			LogOmniRuntime,
+			Log,
+			TEXT("[Omni][Runtime][Console] omni.damage %.1f | systemsAfetados=%d"),
+			Amount,
+			AffectedSystems
+		);
+	}
+
+	static void HandleOmniHealCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		float Amount = 10.0f;
+		if (Args.Num() > 0)
+		{
+			LexFromString(Amount, *Args[0]);
+		}
+		Amount = FMath::Max(0.0f, Amount);
+
+		const int32 AffectedSystems = ForEachStatusSystem(
+			[Amount](UOmniStatusSystem* StatusSystem)
+			{
+				StatusSystem->ApplyHeal(Amount);
+			}
+		);
+		UE_LOG(
+			LogOmniRuntime,
+			Log,
+			TEXT("[Omni][Runtime][Console] omni.heal %.1f | systemsAfetados=%d"),
+			Amount,
+			AffectedSystems
+		);
 	}
 
 	static FAutoConsoleCommand OmniDebugToggleCommand(
@@ -329,6 +384,18 @@ namespace OmniRuntimeConsole
 		TEXT("omni.sprint"),
 		TEXT("Controle de sprint do Omni. Uso: omni.sprint start|stop|toggle|auto [segundos]|status"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniSprintCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniDamageCommand(
+		TEXT("omni.damage"),
+		TEXT("Aplica dano em Game.Attr.HP. Uso: omni.damage [valor]."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniDamageCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniHealCommand(
+		TEXT("omni.heal"),
+		TEXT("Aplica cura em Game.Attr.HP. Uso: omni.heal [valor]."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniHealCommand)
 	);
 }
 
