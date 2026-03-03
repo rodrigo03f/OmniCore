@@ -1,7 +1,9 @@
 #include "Manifest/OmniOfficialManifest.h"
 
 #include "Systems/ActionGate/OmniActionGateSystem.h"
+#include "Systems/Camera/OmniCameraSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
+#include "Systems/Modifiers/OmniModifiersSystem.h"
 #include "Systems/Status/OmniStatusSystem.h"
 
 UOmniOfficialManifest::UOmniOfficialManifest()
@@ -39,13 +41,28 @@ UOmniOfficialManifest::UOmniOfficialManifest()
 
 	{
 		FOmniSystemManifestEntry& Entry = Systems.AddDefaulted_GetRef();
+		Entry.SystemId = TEXT("Modifiers");
+		Entry.SystemClass = UOmniModifiersSystem::StaticClass();
+		Entry.bEnabled = true;
+	}
+
+	{
+		FOmniSystemManifestEntry& Entry = Systems.AddDefaulted_GetRef();
 		Entry.SystemId = TEXT("Movement");
 		Entry.SystemClass = UOmniMovementSystem::StaticClass();
 		Entry.bEnabled = true;
-		Entry.Dependencies = { TEXT("ActionGate"), TEXT("Status") };
+		Entry.Dependencies = { TEXT("ActionGate"), TEXT("Status"), TEXT("Modifiers") };
 		Entry.SetSetting(
 			TEXT("MovementProfileAssetPath"),
 			TEXT("/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default")
 		);
+	}
+
+	{
+		FOmniSystemManifestEntry& Entry = Systems.AddDefaulted_GetRef();
+		Entry.SystemId = TEXT("Camera");
+		Entry.SystemClass = UOmniCameraSystem::StaticClass();
+		Entry.bEnabled = true;
+		Entry.Dependencies = { TEXT("Status") };
 	}
 }

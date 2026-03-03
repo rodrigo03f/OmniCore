@@ -32,6 +32,7 @@ namespace OmniMovement
 	static const FName SystemId(TEXT("Movement"));
 	static const FName ActionGateSystemId(TEXT("ActionGate"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName ModifiersSystemId(TEXT("Modifiers"));
 	static const FName EventOnActionStarted(TEXT("OnActionStarted"));
 	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
 	static const FName EventOnActionDenied(TEXT("OnActionDenied"));
@@ -49,6 +50,11 @@ namespace OmniMovement
 	static const FName ModeWalkTagName(TEXT("Game.Movement.Mode.Walk"));
 	static const FName ModeSprintTagName(TEXT("Game.Movement.Mode.Sprint"));
 	static const FName StateSprintingTagName(TEXT("Game.State.Sprinting"));
+	static const FName ModTargetMovementSpeedTagName(TEXT("Game.ModTarget.MovementSpeed"));
+	static const FName QueryEvaluateModifier(TEXT("EvaluateModifier"));
+	static const FName QueryArgTargetTag(TEXT("TargetTag"));
+	static const FName QueryArgBaseValue(TEXT("BaseValue"));
+	static const FName QueryOutResultValue(TEXT("ResultValue"));
 }
 
 FName UOmniMovementSystem::GetSystemId_Implementation() const
@@ -58,7 +64,7 @@ FName UOmniMovementSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniMovementSystem::GetDependencies_Implementation() const
 {
-	return { OmniMovement::ActionGateSystemId, OmniMovement::StatusSystemId };
+	return { OmniMovement::ActionGateSystemId, OmniMovement::StatusSystemId, OmniMovement::ModifiersSystemId };
 }
 
 void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
@@ -171,6 +177,7 @@ void UOmniMovementSystem::ShutdownSystem_Implementation()
 		DebugSubsystem->RemoveMetric(TEXT("Movement.IsSprinting"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.Mode"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.SprintMultiplier"));
+		DebugSubsystem->RemoveMetric(TEXT("Movement.SpeedModifier"));
 		DebugSubsystem->RemoveMetric(TEXT("Movement.AutoSprintRemaining"));
 		DebugSubsystem->RemoveMetric(OmniMovement::DebugMetricProfileMovement);
 		DebugSubsystem->LogEvent(OmniMovement::CategoryName, TEXT("Movement finalizado"), OmniMovement::SourceName);
@@ -560,7 +567,8 @@ void UOmniMovementSystem::UpdateEffectiveSpeed()
 	}
 
 	const float ModeMultiplier = MovementMode == EOmniMovementMode::Sprint ? RuntimeSettings.SprintMultiplier : 1.0f;
-	CharacterMovement->MaxWalkSpeed = CachedBaseSpeed * ModeMultiplier;
+	const float ModifierMultiplier = QueryMovementSpeedModifierMultiplier();
+	CharacterMovement->MaxWalkSpeed = CachedBaseSpeed * ModeMultiplier * ModifierMultiplier;
 }
 
 void UOmniMovementSystem::UpdateSprintRequestedState()
@@ -596,6 +604,7 @@ void UOmniMovementSystem::PublishTelemetry() const
 	DebugSubsystem->SetMetric(TEXT("Movement.IsSprinting"), bIsSprinting ? TEXT("True") : TEXT("False"));
 	DebugSubsystem->SetMetric(TEXT("Movement.Mode"), MovementMode == EOmniMovementMode::Sprint ? TEXT("Sprint") : TEXT("Walk"));
 	DebugSubsystem->SetMetric(TEXT("Movement.SprintMultiplier"), FString::Printf(TEXT("%.2f"), RuntimeSettings.SprintMultiplier));
+	DebugSubsystem->SetMetric(TEXT("Movement.SpeedModifier"), FString::Printf(TEXT("%.2f"), QueryMovementSpeedModifierMultiplier()));
 	DebugSubsystem->SetMetric(TEXT("Movement.AutoSprintRemaining"), FString::Printf(TEXT("%.1fs"), AutoSprintRemainingSeconds));
 }
 
@@ -863,6 +872,47 @@ bool UOmniMovementSystem::QueryStatusIsExhausted() const
 	}
 
 	return ResponseSchema.bExhausted;
+}
+
+float UOmniMovementSystem::QueryMovementSpeedModifierMultiplier() const
+{
+	if (!Registry.IsValid())
+	{
+		return 1.0f;
+	}
+
+	const FGameplayTag MovementSpeedTargetTag = FGameplayTag::RequestGameplayTag(OmniMovement::ModTargetMovementSpeedTagName, false);
+	if (!MovementSpeedTargetTag.IsValid())
+	{
+		return 1.0f;
+	}
+
+	FOmniQueryMessage Query;
+	Query.SourceSystem = OmniMovement::SystemId;
+	Query.TargetSystem = OmniMovement::ModifiersSystemId;
+	Query.QueryName = OmniMovement::QueryEvaluateModifier;
+	Query.SetArgument(OmniMovement::QueryArgTargetTag, MovementSpeedTargetTag.ToString());
+	Query.SetArgument(OmniMovement::QueryArgBaseValue, TEXT("1.0"));
+
+	if (!Registry->ExecuteQuery(Query) || !Query.bSuccess)
+	{
+		return 1.0f;
+	}
+
+	FString ResultValue;
+	if (!Query.TryGetOutputValue(OmniMovement::QueryOutResultValue, ResultValue))
+	{
+		ResultValue = Query.Result;
+	}
+
+	float ParsedResult = 1.0f;
+	if (ResultValue.IsEmpty())
+	{
+		return 1.0f;
+	}
+
+	LexFromString(ParsedResult, *ResultValue);
+	return FMath::Max(0.0f, ParsedResult);
 }
 
 void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const

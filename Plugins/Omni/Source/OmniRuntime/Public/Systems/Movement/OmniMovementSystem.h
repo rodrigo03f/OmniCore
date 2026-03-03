@@ -78,6 +78,7 @@ private:
 	void UpdateSprintRequestedState();
 	double GetNowSeconds() const;
 	bool QueryStatusIsExhausted() const;
+	float QueryMovementSpeedModifierMultiplier() const;
 	void DispatchStatusSprinting(bool bSprinting) const;
 	FOmniGateDecision QueryCanStartSprint() const;
 	bool DispatchStartSprint() const;

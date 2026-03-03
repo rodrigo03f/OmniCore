@@ -12,6 +12,7 @@
 #include "Modules/ModuleManager.h"
 #include "Systems/Camera/OmniCameraSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
+#include "Systems/Modifiers/OmniModifiersSystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/Status/OmniStatusSystem.h"
 
@@ -228,6 +229,41 @@ namespace OmniRuntimeConsole
 			}
 
 			Function(StatusSystem);
+			++Count;
+		}
+
+		return Count;
+	}
+
+	static int32 ForEachModifiersSystem(const TFunctionRef<void(UOmniModifiersSystem*)>& Function)
+	{
+		if (!GEngine)
+		{
+			return 0;
+		}
+
+		int32 Count = 0;
+		for (const FWorldContext& WorldContext : GEngine->GetWorldContexts())
+		{
+			UGameInstance* GameInstance = WorldContext.OwningGameInstance;
+			if (!GameInstance)
+			{
+				continue;
+			}
+
+			UOmniSystemRegistrySubsystem* Registry = GameInstance->GetSubsystem<UOmniSystemRegistrySubsystem>();
+			if (!Registry || !Registry->IsRegistryInitialized())
+			{
+				continue;
+			}
+
+			UOmniModifiersSystem* ModifiersSystem = Cast<UOmniModifiersSystem>(Registry->GetSystemById(TEXT("Modifiers")));
+			if (!ModifiersSystem)
+			{
+				continue;
+			}
+
+			Function(ModifiersSystem);
 			++Count;
 		}
 
@@ -811,6 +847,152 @@ namespace OmniRuntimeConsole
 		);
 	}
 
+	static void HandleOmniModCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
+		if (Command == TEXT("add"))
+		{
+			if (Args.Num() < 5)
+			{
+				UE_LOG(
+					LogOmniRuntime,
+					Warning,
+					TEXT("[Omni][Runtime][Console] Uso: omni.mod add <ModifierTag> <TargetTag> <Add|Mul> <Magnitude> [SourceId]")
+				);
+				return;
+			}
+
+			FOmniModifierSpec Modifier;
+			Modifier.ModifierTag = FGameplayTag::RequestGameplayTag(FName(*Args[1]), false);
+			Modifier.TargetTag = FGameplayTag::RequestGameplayTag(FName(*Args[2]), false);
+			Modifier.Operation = Args[3].Equals(TEXT("Mul"), ESearchCase::IgnoreCase)
+				? EOmniModifierOperation::Mul
+				: EOmniModifierOperation::Add;
+			LexFromString(Modifier.Magnitude, *Args[4]);
+			Modifier.SourceId = (Args.Num() > 5 && !Args[5].IsEmpty()) ? FName(*Args[5]) : FName(TEXT("Console"));
+
+			int32 AddedCount = 0;
+			const int32 AffectedSystems = ForEachModifiersSystem(
+				[&](UOmniModifiersSystem* ModifiersSystem)
+				{
+					if (ModifiersSystem->AddModifier(Modifier))
+					{
+						++AddedCount;
+					}
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.mod add | systems=%d added=%d modifier=%s target=%s"),
+				AffectedSystems,
+				AddedCount,
+				Modifier.ModifierTag.IsValid() ? *Modifier.ModifierTag.ToString() : TEXT("<invalid>"),
+				Modifier.TargetTag.IsValid() ? *Modifier.TargetTag.ToString() : TEXT("<invalid>")
+			);
+			return;
+		}
+
+		if (Command == TEXT("remove"))
+		{
+			if (Args.Num() < 2)
+			{
+				UE_LOG(LogOmniRuntime, Warning, TEXT("[Omni][Runtime][Console] Uso: omni.mod remove <ModifierTag> [SourceId]"));
+				return;
+			}
+
+			const FGameplayTag ModifierTag = FGameplayTag::RequestGameplayTag(FName(*Args[1]), false);
+			const FName SourceId = (Args.Num() > 2 && !Args[2].IsEmpty()) ? FName(*Args[2]) : FName(TEXT("Console"));
+
+			int32 RemovedCount = 0;
+			const int32 AffectedSystems = ForEachModifiersSystem(
+				[&](UOmniModifiersSystem* ModifiersSystem)
+				{
+					if (ModifiersSystem->RemoveModifier(ModifierTag, SourceId))
+					{
+						++RemovedCount;
+					}
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.mod remove | systems=%d removed=%d modifier=%s source=%s"),
+				AffectedSystems,
+				RemovedCount,
+				ModifierTag.IsValid() ? *ModifierTag.ToString() : TEXT("<invalid>"),
+				*SourceId.ToString()
+			);
+			return;
+		}
+
+		if (Command == TEXT("eval"))
+		{
+			if (Args.Num() < 2)
+			{
+				UE_LOG(LogOmniRuntime, Warning, TEXT("[Omni][Runtime][Console] Uso: omni.mod eval <TargetTag> [BaseValue]"));
+				return;
+			}
+
+			const FGameplayTag TargetTag = FGameplayTag::RequestGameplayTag(FName(*Args[1]), false);
+			float BaseValue = 1.0f;
+			if (Args.Num() > 2)
+			{
+				LexFromString(BaseValue, *Args[2]);
+			}
+
+			ForEachModifiersSystem(
+				[&](UOmniModifiersSystem* ModifiersSystem)
+				{
+					const float ResultValue = ModifiersSystem->Evaluate(TargetTag, BaseValue);
+					UE_LOG(
+						LogOmniRuntime,
+						Log,
+						TEXT("[Omni][Runtime][Console] omni.mod eval | target=%s base=%.3f result=%.3f"),
+						TargetTag.IsValid() ? *TargetTag.ToString() : TEXT("<invalid>"),
+						BaseValue,
+						ResultValue
+					);
+				}
+			);
+			return;
+		}
+
+		int32 SystemIndex = 0;
+		ForEachModifiersSystem(
+			[&](UOmniModifiersSystem* ModifiersSystem)
+			{
+				++SystemIndex;
+				const TArray<FOmniModifierSpec> Snapshot = ModifiersSystem->GetSnapshot();
+				UE_LOG(
+					LogOmniRuntime,
+					Log,
+					TEXT("[Omni][Runtime][Console] omni.mod status | system=%d entries=%d"),
+					SystemIndex,
+					Snapshot.Num()
+				);
+
+				for (const FOmniModifierSpec& Entry : Snapshot)
+				{
+					UE_LOG(
+						LogOmniRuntime,
+						Log,
+						TEXT("[Omni][Runtime][Console] omni.mod entry | modifier=%s target=%s op=%s magnitude=%.3f source=%s"),
+						Entry.ModifierTag.IsValid() ? *Entry.ModifierTag.ToString() : TEXT("<none>"),
+						Entry.TargetTag.IsValid() ? *Entry.TargetTag.ToString() : TEXT("<none>"),
+						Entry.Operation == EOmniModifierOperation::Mul ? TEXT("Mul") : TEXT("Add"),
+						Entry.Magnitude,
+						Entry.SourceId == NAME_None ? TEXT("<none>") : *Entry.SourceId.ToString()
+					);
+				}
+			}
+		);
+	}
+
 	static FAutoConsoleCommand OmniDebugToggleCommand(
 		TEXT("omni.debug.toggle"),
 		TEXT("Alterna o overlay de debug do Omni."),
@@ -863,6 +1045,12 @@ namespace OmniRuntimeConsole
 		TEXT("omni.statusfx"),
 		TEXT("Status effects Omni. Uso: omni.statusfx apply|remove|status"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniStatusFxCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniModifiersCommand(
+		TEXT("omni.mod"),
+		TEXT("Modifiers Omni. Uso: omni.mod add|remove|eval|status"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniModCommand)
 	);
 }
 
