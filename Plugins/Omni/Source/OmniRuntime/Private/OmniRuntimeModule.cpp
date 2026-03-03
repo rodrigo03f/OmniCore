@@ -1,12 +1,15 @@
 #include "OmniRuntimeModule.h"
 
+#include "Avatar/OmniAvatarBridgeComponent.h"
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameplayTagsManager.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
+#include "Systems/Camera/OmniCameraSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
 #include "Systems/Status/OmniStatusSystem.h"
@@ -160,6 +163,41 @@ namespace OmniRuntimeConsole
 		return Count;
 	}
 
+	static int32 ForEachCameraSystem(const TFunctionRef<void(UOmniCameraSystem*)>& Function)
+	{
+		if (!GEngine)
+		{
+			return 0;
+		}
+
+		int32 Count = 0;
+		for (const FWorldContext& WorldContext : GEngine->GetWorldContexts())
+		{
+			UGameInstance* GameInstance = WorldContext.OwningGameInstance;
+			if (!GameInstance)
+			{
+				continue;
+			}
+
+			UOmniSystemRegistrySubsystem* Registry = GameInstance->GetSubsystem<UOmniSystemRegistrySubsystem>();
+			if (!Registry || !Registry->IsRegistryInitialized())
+			{
+				continue;
+			}
+
+			UOmniCameraSystem* CameraSystem = Cast<UOmniCameraSystem>(Registry->GetSystemById(TEXT("Camera")));
+			if (!CameraSystem)
+			{
+				continue;
+			}
+
+			Function(CameraSystem);
+			++Count;
+		}
+
+		return Count;
+	}
+
 	static int32 ForEachStatusSystem(const TFunctionRef<void(UOmniStatusSystem*)>& Function)
 	{
 		if (!GEngine)
@@ -189,6 +227,41 @@ namespace OmniRuntimeConsole
 			}
 
 			Function(StatusSystem);
+			++Count;
+		}
+
+		return Count;
+	}
+
+	static int32 ForEachLocalPawn(const TFunctionRef<void(APawn*)>& Function)
+	{
+		if (!GEngine)
+		{
+			return 0;
+		}
+
+		int32 Count = 0;
+		for (const FWorldContext& WorldContext : GEngine->GetWorldContexts())
+		{
+			UGameInstance* GameInstance = WorldContext.OwningGameInstance;
+			if (!GameInstance)
+			{
+				continue;
+			}
+
+			APlayerController* PlayerController = GameInstance->GetFirstLocalPlayerController();
+			if (!PlayerController)
+			{
+				continue;
+			}
+
+			APawn* Pawn = PlayerController->GetPawn();
+			if (!Pawn)
+			{
+				continue;
+			}
+
+			Function(Pawn);
 			++Count;
 		}
 
@@ -316,6 +389,54 @@ namespace OmniRuntimeConsole
 		}
 	}
 
+	static void HandleOmniCameraCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
+		if (Command != TEXT("status"))
+		{
+			UE_LOG(
+				LogOmniRuntime,
+				Warning,
+				TEXT("[Omni][Runtime][Console] Comando invalido para omni.camera: '%s' | Uso: omni.camera status"),
+				*Command
+			);
+			return;
+		}
+
+		int32 CameraCount = 0;
+		ForEachCameraSystem(
+			[&CameraCount](UOmniCameraSystem* CameraSystem)
+			{
+				++CameraCount;
+				const FOmniCameraSnapshot Snapshot = CameraSystem->GetSnapshot();
+				UE_LOG(
+					LogOmniRuntime,
+					Log,
+					TEXT("[Omni][Runtime][Console] Camera[%d] mode=%s rig=%s fov=%.2f ortho=%.2f arm=%.2f offset=%s fallback=%s"),
+					CameraCount,
+					Snapshot.ActiveModeTag.IsValid() ? *Snapshot.ActiveModeTag.ToString() : TEXT("<none>"),
+					Snapshot.ActiveRigName == NAME_None ? TEXT("<none>") : *Snapshot.ActiveRigName.ToString(),
+					Snapshot.CurrentFOV,
+					Snapshot.CurrentOrthoWidth,
+					Snapshot.CurrentArmLength,
+					*Snapshot.CurrentOffset.ToCompactString(),
+					Snapshot.bUsingFallback ? TEXT("True") : TEXT("False")
+				);
+			}
+		);
+
+		if (CameraCount == 0)
+		{
+			UE_LOG(
+				LogOmniRuntime,
+				Warning,
+				TEXT("[Omni][Runtime][Console] Nenhum CameraSystem encontrado | Verifique Registry inicializado e Manifest configurado")
+			);
+		}
+	}
+
 	static void HandleOmniDamageCommand(const TArray<FString>& Args, UWorld* World)
 	{
 		(void)World;
@@ -368,6 +489,86 @@ namespace OmniRuntimeConsole
 		);
 	}
 
+	static void HandleOmniAvatarBridgeCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
+		if (Command == TEXT("attach"))
+		{
+			int32 AttachedCount = 0;
+			const int32 LocalPawns = ForEachLocalPawn(
+				[&AttachedCount](APawn* Pawn)
+				{
+					if (!Pawn)
+					{
+						return;
+					}
+
+					UOmniAvatarBridgeComponent* ExistingBridge = Pawn->FindComponentByClass<UOmniAvatarBridgeComponent>();
+					if (ExistingBridge)
+					{
+						++AttachedCount;
+						return;
+					}
+
+					UOmniAvatarBridgeComponent* NewBridge = NewObject<UOmniAvatarBridgeComponent>(
+						Pawn,
+						UOmniAvatarBridgeComponent::StaticClass(),
+						TEXT("OmniAvatarBridge")
+					);
+					if (!NewBridge)
+					{
+						return;
+					}
+
+					Pawn->AddInstanceComponent(NewBridge);
+					NewBridge->RegisterComponent();
+					++AttachedCount;
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.avatarbridge attach | localPawns=%d bridgesReady=%d"),
+				LocalPawns,
+				AttachedCount
+			);
+			return;
+		}
+
+		if (Command != TEXT("status"))
+		{
+			UE_LOG(
+				LogOmniRuntime,
+				Warning,
+				TEXT("[Omni][Runtime][Console] Comando invalido para omni.avatarbridge: '%s' | Uso: omni.avatarbridge attach|status"),
+				*Command
+			);
+			return;
+		}
+
+		int32 ReadyCount = 0;
+		const int32 LocalPawns = ForEachLocalPawn(
+			[&ReadyCount](APawn* Pawn)
+			{
+				if (Pawn && Pawn->FindComponentByClass<UOmniAvatarBridgeComponent>())
+				{
+					++ReadyCount;
+				}
+			}
+		);
+
+		UE_LOG(
+			LogOmniRuntime,
+			Log,
+			TEXT("[Omni][Runtime][Console] omni.avatarbridge status | localPawns=%d bridgesReady=%d"),
+			LocalPawns,
+			ReadyCount
+		);
+	}
+
 	static FAutoConsoleCommand OmniDebugToggleCommand(
 		TEXT("omni.debug.toggle"),
 		TEXT("Alterna o overlay de debug do Omni."),
@@ -386,6 +587,12 @@ namespace OmniRuntimeConsole
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniSprintCommand)
 	);
 
+	static FAutoConsoleCommandWithWorldAndArgs OmniCameraCommand(
+		TEXT("omni.camera"),
+		TEXT("Status da camera Omni. Uso: omni.camera status"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniCameraCommand)
+	);
+
 	static FAutoConsoleCommandWithWorldAndArgs OmniDamageCommand(
 		TEXT("omni.damage"),
 		TEXT("Aplica dano em Game.Attr.HP. Uso: omni.damage [valor]."),
@@ -396,6 +603,12 @@ namespace OmniRuntimeConsole
 		TEXT("omni.heal"),
 		TEXT("Aplica cura em Game.Attr.HP. Uso: omni.heal [valor]."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniHealCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniAvatarBridgeCommand(
+		TEXT("omni.avatarbridge"),
+		TEXT("Bridge de avatar Omni. Uso: omni.avatarbridge attach|status"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniAvatarBridgeCommand)
 	);
 }
 
