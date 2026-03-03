@@ -10,6 +10,8 @@
 #include "Systems/OmniSystemMessageSchemas.h"
 #include "UObject/SoftObjectPath.h"
 
+#include <limits>
+
 DEFINE_LOG_CATEGORY_STATIC(LogOmniStatusSystem, Log, All);
 
 namespace OmniStatus
@@ -18,11 +20,14 @@ namespace OmniStatus
 	static const FName SourceName(TEXT("AttributesSystem"));
 	static const FName SystemId(TEXT("Status"));
 	static const FName CommandSetSprinting(TEXT("SetSprinting"));
+	static const FName CommandApplyStatus(TEXT("ApplyStatus"));
+	static const FName CommandRemoveStatus(TEXT("RemoveStatus"));
 	static const FName CommandConsumeStamina(TEXT("ConsumeStamina"));
 	static const FName CommandAddStamina(TEXT("AddStamina"));
 	static const FName QueryIsExhausted(TEXT("IsExhausted"));
 	static const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
 	static const FName QueryGetStamina(TEXT("GetStamina"));
+	static const FName QueryGetStatusSnapshotCsv(TEXT("GetStatusSnapshotCsv"));
 	static const FName ConfigSectionAttributes(TEXT("Omni.Attributes"));
 	static const FName ConfigKeyRecipe(TEXT("Recipe"));
 	static const FName ConfigSectionLegacy(TEXT("/Script/OmniRuntime.OmniStatusSystem"));
@@ -34,6 +39,9 @@ namespace OmniStatus
 	static const FName StaminaTagName(TEXT("Game.Attr.Stamina"));
 	static const FName SprintingStateTagName(TEXT("Game.State.Sprinting"));
 	static const FName ExhaustedStateTagName(TEXT("Game.State.Exhausted"));
+	static const FName StatusHasteTagName(TEXT("Game.Status.Haste"));
+	static const FName StatusBurningTagName(TEXT("Game.Status.Burning"));
+	static const FName DefaultStatusSource(TEXT("Status.Runtime"));
 }
 
 static FString NormalizeRecipePath(const FString& RawPath)
@@ -95,6 +103,7 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 	}
 
 	ResolveOfficialTags();
+	InitializeStatusRecipes();
 	ApplyFallbackRecipe();
 
 	FString RecipeLoadError;
@@ -117,6 +126,7 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 	TimeSinceLastStaminaDrain = StaminaRules.RegenDelaySeconds;
 	bExhausted = false;
 	UpdateStateTags();
+	RebuildStatusSnapshot(LastClockSeconds);
 	InitializeSnapshot();
 	PublishTelemetry();
 	SetInitializationResult(true);
@@ -142,6 +152,9 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 void UOmniStatusSystem::ShutdownSystem_Implementation()
 {
 	AttributesByTag.Reset();
+	StatusRecipesByTag.Reset();
+	StatusSnapshot.Reset();
+	ActiveStatusEffects.Reset();
 	ContextTags.Reset();
 	StateTags.Reset();
 	StaminaRules = FOmniStaminaRules();
@@ -155,6 +168,7 @@ void UOmniStatusSystem::ShutdownSystem_Implementation()
 		DebugSubsystem->RemoveMetric(TEXT("Status.Stamina"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Exhausted"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.Sprinting"));
+		DebugSubsystem->RemoveMetric(TEXT("Status.ActiveEffects"));
 		DebugSubsystem->RemoveMetric(TEXT("Status.HP"));
 		DebugSubsystem->RemoveMetric(OmniStatus::DebugMetricProfileStatus);
 		DebugSubsystem->RemoveMetric(OmniStatus::DebugMetricProfileAttributes);
@@ -186,8 +200,10 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 	if (ClockDeltaTime > 0.0f)
 	{
 		TickStamina(ClockDeltaTime);
+		TickStatusEffects(LastClockSeconds);
 	}
 
+	RebuildStatusSnapshot(LastClockSeconds);
 	InitializeSnapshot();
 	PublishTelemetry();
 }
@@ -205,6 +221,61 @@ bool UOmniStatusSystem::HandleCommand_Implementation(const FOmniCommandMessage& 
 
 		SetSprinting(ParsedSchema.bSprinting);
 		return true;
+	}
+
+	if (Command.CommandName == OmniStatus::CommandApplyStatus)
+	{
+		FString StatusTagValue;
+		if (!Command.TryGetArgument(TEXT("StatusTag"), StatusTagValue))
+		{
+			return false;
+		}
+
+		const FGameplayTag StatusTag = FGameplayTag::RequestGameplayTag(FName(*StatusTagValue), false);
+		if (!StatusTag.IsValid())
+		{
+			return false;
+		}
+
+		FString SourceIdValue;
+		FName SourceId = OmniStatus::DefaultStatusSource;
+		if (Command.TryGetArgument(TEXT("SourceId"), SourceIdValue) && !SourceIdValue.IsEmpty())
+		{
+			SourceId = FName(*SourceIdValue);
+		}
+
+		float DurationOverrideSeconds = -1.0f;
+		FString DurationValue;
+		if (Command.TryGetArgument(TEXT("Duration"), DurationValue))
+		{
+			LexFromString(DurationOverrideSeconds, *DurationValue);
+		}
+
+		return ApplyStatus(StatusTag, SourceId, DurationOverrideSeconds);
+	}
+
+	if (Command.CommandName == OmniStatus::CommandRemoveStatus)
+	{
+		FString StatusTagValue;
+		if (!Command.TryGetArgument(TEXT("StatusTag"), StatusTagValue))
+		{
+			return false;
+		}
+
+		const FGameplayTag StatusTag = FGameplayTag::RequestGameplayTag(FName(*StatusTagValue), false);
+		if (!StatusTag.IsValid())
+		{
+			return false;
+		}
+
+		FString SourceIdValue;
+		FName SourceId = OmniStatus::DefaultStatusSource;
+		if (Command.TryGetArgument(TEXT("SourceId"), SourceIdValue) && !SourceIdValue.IsEmpty())
+		{
+			SourceId = FName(*SourceIdValue);
+		}
+
+		return RemoveStatus(StatusTag, SourceId);
 	}
 
 	if (Command.CommandName == OmniStatus::CommandConsumeStamina)
@@ -278,6 +349,30 @@ bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 		Query.SetOutputValue(TEXT("Current"), FString::Printf(TEXT("%.2f"), CurrentStamina));
 		Query.SetOutputValue(TEXT("Max"), FString::Printf(TEXT("%.2f"), MaxStamina));
 		Query.SetOutputValue(TEXT("Normalized"), FString::Printf(TEXT("%.4f"), GetStaminaNormalized()));
+		return true;
+	}
+
+	if (Query.QueryName == OmniStatus::QueryGetStatusSnapshotCsv)
+	{
+		TArray<FString> Entries;
+		Entries.Reserve(StatusSnapshot.Num());
+		for (const FOmniStatusEntry& Entry : StatusSnapshot)
+		{
+			Entries.Add(
+				FString::Printf(
+					TEXT("%s|%s|%d|%.2f"),
+					Entry.StatusTag.IsValid() ? *Entry.StatusTag.ToString() : TEXT("<none>"),
+					Entry.SourceId == NAME_None ? TEXT("<none>") : *Entry.SourceId.ToString(),
+					Entry.Stacks,
+					Entry.RemainingTimeSeconds
+				)
+			);
+		}
+		Entries.Sort();
+
+		Query.bHandled = true;
+		Query.bSuccess = true;
+		Query.Result = FString::Join(Entries, TEXT(","));
 		return true;
 	}
 
@@ -425,6 +520,186 @@ void UOmniStatusSystem::ApplyHeal(const float Amount)
 	PublishTelemetry();
 }
 
+bool UOmniStatusSystem::ApplyStatus(const FGameplayTag StatusTag, FName SourceId, const float DurationOverrideSeconds)
+{
+	if (!StatusTag.IsValid())
+	{
+		return false;
+	}
+
+	if (SourceId == NAME_None)
+	{
+		SourceId = OmniStatus::DefaultStatusSource;
+	}
+
+	const double NowSeconds = ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : LastClockSeconds;
+
+	FOmniStatusRecipe* ExistingRecipe = StatusRecipesByTag.Find(StatusTag);
+	if (!ExistingRecipe)
+	{
+		FOmniStatusRecipe FallbackRecipe;
+		FallbackRecipe.StatusTag = StatusTag;
+		FallbackRecipe.DefaultDurationSeconds = 5.0f;
+		FallbackRecipe.bStackable = false;
+		FallbackRecipe.MaxStacks = 1;
+		FallbackRecipe.RefreshPolicy = EOmniStatusRefreshPolicy::RefreshDuration;
+		FallbackRecipe.TickIntervalSeconds = 0.0f;
+		StatusRecipesByTag.Add(StatusTag, FallbackRecipe);
+		ExistingRecipe = StatusRecipesByTag.Find(StatusTag);
+
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("[Omni][Status][Event] FallbackRecipe | status=%s duration=%.2f stackable=False"),
+			*StatusTag.ToString(),
+			FallbackRecipe.DefaultDurationSeconds
+		);
+	}
+
+	if (!ExistingRecipe)
+	{
+		return false;
+	}
+
+	const float ResolvedDurationSeconds = DurationOverrideSeconds >= 0.0f
+		? DurationOverrideSeconds
+		: ExistingRecipe->DefaultDurationSeconds;
+	const bool bInfiniteDuration = ResolvedDurationSeconds <= KINDA_SMALL_NUMBER;
+
+	const int32 ExistingIndex = FindActiveStatusIndex(StatusTag, SourceId);
+	if (ExistingIndex != INDEX_NONE)
+	{
+		FActiveStatusEffect& Existing = ActiveStatusEffects[ExistingIndex];
+
+		int32 PreviousStacks = Existing.Stacks;
+		if (ExistingRecipe->bStackable)
+		{
+			Existing.Stacks = FMath::Clamp(Existing.Stacks + 1, 1, ExistingRecipe->MaxStacks);
+		}
+		else
+		{
+			Existing.Stacks = 1;
+		}
+
+		if (!bInfiniteDuration)
+		{
+			if (Existing.bInfiniteDuration)
+			{
+				Existing.ExpireTimeSeconds = NowSeconds + static_cast<double>(ResolvedDurationSeconds);
+			}
+			else
+			{
+				switch (ExistingRecipe->RefreshPolicy)
+				{
+				case EOmniStatusRefreshPolicy::RefreshDuration:
+					Existing.ExpireTimeSeconds = NowSeconds + static_cast<double>(ResolvedDurationSeconds);
+					break;
+				case EOmniStatusRefreshPolicy::ExtendDuration:
+					Existing.ExpireTimeSeconds += static_cast<double>(ResolvedDurationSeconds);
+					break;
+				case EOmniStatusRefreshPolicy::IgnoreDuration:
+					break;
+				default:
+					Existing.ExpireTimeSeconds = NowSeconds + static_cast<double>(ResolvedDurationSeconds);
+					break;
+				}
+			}
+		}
+
+		Existing.bInfiniteDuration = bInfiniteDuration;
+		Existing.TickIntervalSeconds = ExistingRecipe->TickIntervalSeconds;
+		Existing.NextTickTimeSeconds = Existing.TickIntervalSeconds > KINDA_SMALL_NUMBER
+			? NowSeconds + static_cast<double>(Existing.TickIntervalSeconds)
+			: 0.0;
+
+		if (Existing.Stacks != PreviousStacks)
+		{
+			UE_LOG(
+				LogOmniStatusSystem,
+				Log,
+				TEXT("[Omni][Status][Event] StackChanged | status=%s source=%s stacks=%d"),
+				*StatusTag.ToString(),
+				*SourceId.ToString(),
+				Existing.Stacks
+			);
+		}
+
+		UE_LOG(
+			LogOmniStatusSystem,
+			Log,
+			TEXT("[Omni][Status][Event] Apply | status=%s source=%s duration=%.2f stacks=%d"),
+			*StatusTag.ToString(),
+			*SourceId.ToString(),
+			ResolvedDurationSeconds,
+			Existing.Stacks
+		);
+	}
+	else
+	{
+		FActiveStatusEffect NewEffect;
+		NewEffect.StatusTag = StatusTag;
+		NewEffect.SourceId = SourceId;
+		NewEffect.Stacks = 1;
+		NewEffect.StartTimeSeconds = NowSeconds;
+		NewEffect.bInfiniteDuration = bInfiniteDuration;
+		NewEffect.ExpireTimeSeconds = bInfiniteDuration ? TNumericLimits<double>::Max() : (NowSeconds + static_cast<double>(ResolvedDurationSeconds));
+		NewEffect.TickIntervalSeconds = ExistingRecipe->TickIntervalSeconds;
+		NewEffect.NextTickTimeSeconds = NewEffect.TickIntervalSeconds > KINDA_SMALL_NUMBER
+			? NowSeconds + static_cast<double>(NewEffect.TickIntervalSeconds)
+			: 0.0;
+		ActiveStatusEffects.Add(NewEffect);
+
+		UE_LOG(
+			LogOmniStatusSystem,
+			Log,
+			TEXT("[Omni][Status][Event] Apply | status=%s source=%s duration=%.2f stacks=1"),
+			*StatusTag.ToString(),
+			*SourceId.ToString(),
+			ResolvedDurationSeconds
+		);
+	}
+
+	SortActiveStatusEffects();
+	RefreshStatusTags();
+	RebuildStatusSnapshot(NowSeconds);
+	UpdateStateTags();
+	PublishTelemetry();
+	return true;
+}
+
+bool UOmniStatusSystem::RemoveStatus(const FGameplayTag StatusTag, const FName SourceId)
+{
+	const FName ResolvedSourceId = SourceId == NAME_None ? OmniStatus::DefaultStatusSource : SourceId;
+	const int32 ExistingIndex = FindActiveStatusIndex(StatusTag, ResolvedSourceId);
+	if (ExistingIndex == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const FActiveStatusEffect Removed = ActiveStatusEffects[ExistingIndex];
+	ActiveStatusEffects.RemoveAt(ExistingIndex);
+	SortActiveStatusEffects();
+	RefreshStatusTags();
+	RebuildStatusSnapshot(ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : LastClockSeconds);
+	UpdateStateTags();
+	PublishTelemetry();
+
+	UE_LOG(
+		LogOmniStatusSystem,
+		Log,
+		TEXT("[Omni][Status][Event] Expire | status=%s source=%s reason=Removed"),
+		*Removed.StatusTag.ToString(),
+		*Removed.SourceId.ToString()
+	);
+
+	return true;
+}
+
+TArray<FOmniStatusEntry> UOmniStatusSystem::GetStatusSnapshot() const
+{
+	return StatusSnapshot;
+}
+
 bool UOmniStatusSystem::TryLoadRecipeFromConfig(FString& OutError)
 {
 	OutError.Reset();
@@ -552,6 +827,35 @@ void UOmniStatusSystem::ApplyFallbackRecipe()
 	StaminaRules = FOmniStaminaRules();
 }
 
+void UOmniStatusSystem::InitializeStatusRecipes()
+{
+	StatusRecipesByTag.Reset();
+
+	FOmniStatusRecipe HasteRecipe;
+	HasteRecipe.StatusTag = FGameplayTag::RequestGameplayTag(OmniStatus::StatusHasteTagName, false);
+	HasteRecipe.DefaultDurationSeconds = 5.0f;
+	HasteRecipe.bStackable = false;
+	HasteRecipe.MaxStacks = 1;
+	HasteRecipe.RefreshPolicy = EOmniStatusRefreshPolicy::RefreshDuration;
+	HasteRecipe.TickIntervalSeconds = 0.0f;
+	if (HasteRecipe.StatusTag.IsValid())
+	{
+		StatusRecipesByTag.Add(HasteRecipe.StatusTag, HasteRecipe);
+	}
+
+	FOmniStatusRecipe BurningRecipe;
+	BurningRecipe.StatusTag = FGameplayTag::RequestGameplayTag(OmniStatus::StatusBurningTagName, false);
+	BurningRecipe.DefaultDurationSeconds = 3.0f;
+	BurningRecipe.bStackable = true;
+	BurningRecipe.MaxStacks = 3;
+	BurningRecipe.RefreshPolicy = EOmniStatusRefreshPolicy::RefreshDuration;
+	BurningRecipe.TickIntervalSeconds = 1.0f;
+	if (BurningRecipe.StatusTag.IsValid())
+	{
+		StatusRecipesByTag.Add(BurningRecipe.StatusTag, BurningRecipe);
+	}
+}
+
 void UOmniStatusSystem::ResolveOfficialTags()
 {
 	HpTag = FGameplayTag::RequestGameplayTag(OmniStatus::HpTagName, false);
@@ -587,6 +891,24 @@ void UOmniStatusSystem::InitializeSnapshot()
 	}
 
 	Snapshot.bExhausted = bExhausted;
+}
+
+void UOmniStatusSystem::RebuildStatusSnapshot(const double NowSeconds)
+{
+	StatusSnapshot.Reset();
+	StatusSnapshot.Reserve(ActiveStatusEffects.Num());
+
+	for (const FActiveStatusEffect& Effect : ActiveStatusEffects)
+	{
+		FOmniStatusEntry Entry;
+		Entry.StatusTag = Effect.StatusTag;
+		Entry.SourceId = Effect.SourceId;
+		Entry.Stacks = Effect.Stacks;
+		Entry.RemainingTimeSeconds = Effect.bInfiniteDuration
+			? -1.0f
+			: FMath::Max(0.0f, static_cast<float>(Effect.ExpireTimeSeconds - NowSeconds));
+		StatusSnapshot.Add(Entry);
+	}
 }
 
 bool UOmniStatusSystem::ResolveClockDelta(float& OutDeltaTime)
@@ -635,6 +957,99 @@ void UOmniStatusSystem::TickStamina(const float DeltaTime)
 	else if (bExhausted && StaminaAttribute->Current >= StaminaRules.RecoverThreshold)
 	{
 		SetExhausted(false);
+	}
+}
+
+void UOmniStatusSystem::TickStatusEffects(const double NowSeconds)
+{
+	if (ActiveStatusEffects.Num() == 0)
+	{
+		return;
+	}
+
+	bool bAnyChange = false;
+	for (int32 Index = ActiveStatusEffects.Num() - 1; Index >= 0; --Index)
+	{
+		FActiveStatusEffect& Effect = ActiveStatusEffects[Index];
+
+		if (Effect.TickIntervalSeconds > KINDA_SMALL_NUMBER && Effect.NextTickTimeSeconds > 0.0)
+		{
+			while (NowSeconds + KINDA_SMALL_NUMBER >= Effect.NextTickTimeSeconds)
+			{
+				Effect.NextTickTimeSeconds += static_cast<double>(Effect.TickIntervalSeconds);
+			}
+		}
+
+		if (!Effect.bInfiniteDuration && NowSeconds + KINDA_SMALL_NUMBER >= Effect.ExpireTimeSeconds)
+		{
+			UE_LOG(
+				LogOmniStatusSystem,
+				Log,
+				TEXT("[Omni][Status][Event] Expire | status=%s source=%s reason=Duration"),
+				*Effect.StatusTag.ToString(),
+				*Effect.SourceId.ToString()
+			);
+			ActiveStatusEffects.RemoveAt(Index);
+			bAnyChange = true;
+		}
+	}
+
+	if (bAnyChange)
+	{
+		SortActiveStatusEffects();
+		RefreshStatusTags();
+		UpdateStateTags();
+	}
+}
+
+int32 UOmniStatusSystem::FindActiveStatusIndex(const FGameplayTag StatusTag, const FName SourceId) const
+{
+	for (int32 Index = 0; Index < ActiveStatusEffects.Num(); ++Index)
+	{
+		const FActiveStatusEffect& Effect = ActiveStatusEffects[Index];
+		if (Effect.StatusTag == StatusTag && Effect.SourceId == SourceId)
+		{
+			return Index;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
+void UOmniStatusSystem::SortActiveStatusEffects()
+{
+	ActiveStatusEffects.Sort(
+		[](const FActiveStatusEffect& Left, const FActiveStatusEffect& Right)
+		{
+			const FString LeftStatus = Left.StatusTag.ToString();
+			const FString RightStatus = Right.StatusTag.ToString();
+			if (LeftStatus != RightStatus)
+			{
+				return LeftStatus < RightStatus;
+			}
+
+			const FString LeftSource = Left.SourceId.ToString();
+			const FString RightSource = Right.SourceId.ToString();
+			return LeftSource < RightSource;
+		}
+	);
+}
+
+void UOmniStatusSystem::RefreshStatusTags()
+{
+	const bool bIsSprinting = SprintingStateTag.IsValid() && ContextTags.HasTagExact(SprintingStateTag);
+	ContextTags.Reset();
+	if (bIsSprinting && SprintingStateTag.IsValid())
+	{
+		ContextTags.AddTag(SprintingStateTag);
+	}
+
+	for (const FActiveStatusEffect& Effect : ActiveStatusEffects)
+	{
+		if (Effect.StatusTag.IsValid())
+		{
+			ContextTags.AddTag(Effect.StatusTag);
+		}
 	}
 }
 
@@ -712,6 +1127,7 @@ void UOmniStatusSystem::PublishTelemetry()
 	DebugSubsystem->SetMetric(TEXT("Status.HP"), FString::Printf(TEXT("%.1f/%.1f"), Snapshot.HP.Current, Snapshot.HP.Max));
 	DebugSubsystem->SetMetric(TEXT("Status.Stamina"), FString::Printf(TEXT("%.1f/%.1f"), Snapshot.Stamina.Current, Snapshot.Stamina.Max));
 	DebugSubsystem->SetMetric(TEXT("Status.Exhausted"), Snapshot.bExhausted ? TEXT("True") : TEXT("False"));
+	DebugSubsystem->SetMetric(TEXT("Status.ActiveEffects"), FString::Printf(TEXT("%d"), ActiveStatusEffects.Num()));
 	DebugSubsystem->SetMetric(
 		TEXT("Status.Sprinting"),
 		(SprintingStateTag.IsValid() && ContextTags.HasTagExact(SprintingStateTag)) ? TEXT("True") : TEXT("False")

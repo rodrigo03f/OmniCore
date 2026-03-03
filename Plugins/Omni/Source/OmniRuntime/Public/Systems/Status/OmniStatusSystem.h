@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Systems/Attributes/OmniAttributeTypes.h"
+#include "Systems/Status/OmniStatusData.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniStatusSystem.generated.h"
 
@@ -78,13 +79,40 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Omni|Attributes")
 	void ApplyHeal(float Amount);
 
+	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
+	bool ApplyStatus(FGameplayTag StatusTag, FName SourceId, float DurationOverrideSeconds = -1.0f);
+
+	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
+	bool RemoveStatus(FGameplayTag StatusTag, FName SourceId);
+
+	UFUNCTION(BlueprintPure, Category = "Omni|Status")
+	TArray<FOmniStatusEntry> GetStatusSnapshot() const;
+
 private:
+	struct FActiveStatusEffect
+	{
+		FGameplayTag StatusTag;
+		FName SourceId = NAME_None;
+		int32 Stacks = 1;
+		double StartTimeSeconds = 0.0;
+		double ExpireTimeSeconds = 0.0;
+		double NextTickTimeSeconds = 0.0;
+		float TickIntervalSeconds = 0.0f;
+		bool bInfiniteDuration = false;
+	};
+
 	bool TryLoadRecipeFromConfig(FString& OutError);
 	void ApplyFallbackRecipe();
+	void InitializeStatusRecipes();
 	void ResolveOfficialTags();
 	void InitializeSnapshot();
+	void RebuildStatusSnapshot(double NowSeconds);
 	bool ResolveClockDelta(float& OutDeltaTime);
 	void TickStamina(const float DeltaTime);
+	void TickStatusEffects(double NowSeconds);
+	int32 FindActiveStatusIndex(FGameplayTag StatusTag, FName SourceId) const;
+	void SortActiveStatusEffects();
+	void RefreshStatusTags();
 	FOmniAttributeValue* FindAttributeMutable(FGameplayTag AttributeTag);
 	const FOmniAttributeValue* FindAttribute(FGameplayTag AttributeTag) const;
 	void ClampAttribute(FOmniAttributeValue& Attribute) const;
@@ -128,6 +156,14 @@ private:
 
 	UPROPERTY(Transient)
 	FGameplayTag ExhaustedStateTag;
+
+	UPROPERTY(Transient)
+	TMap<FGameplayTag, FOmniStatusRecipe> StatusRecipesByTag;
+
+	UPROPERTY(Transient)
+	TArray<FOmniStatusEntry> StatusSnapshot;
+
+	TArray<FActiveStatusEffect> ActiveStatusEffects;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniSystemRegistrySubsystem> Registry;

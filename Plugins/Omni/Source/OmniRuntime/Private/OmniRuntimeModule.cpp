@@ -667,6 +667,150 @@ namespace OmniRuntimeConsole
 		);
 	}
 
+	static void HandleOmniStatusFxCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
+		if (Command == TEXT("apply"))
+		{
+			if (Args.Num() < 2)
+			{
+				UE_LOG(
+					LogOmniRuntime,
+					Warning,
+					TEXT("[Omni][Runtime][Console] Uso: omni.statusfx apply <StatusTag> [Duration] [SourceId]")
+				);
+				return;
+			}
+
+			const FGameplayTag StatusTag = FGameplayTag::RequestGameplayTag(FName(*Args[1]), false);
+			if (!StatusTag.IsValid())
+			{
+				UE_LOG(
+					LogOmniRuntime,
+					Warning,
+					TEXT("[Omni][Runtime][Console] StatusTag invalida em omni.statusfx apply: %s"),
+					*Args[1]
+				);
+				return;
+			}
+
+			float DurationSeconds = -1.0f;
+			if (Args.Num() > 2)
+			{
+				LexFromString(DurationSeconds, *Args[2]);
+			}
+
+			const FName SourceId = (Args.Num() > 3 && !Args[3].IsEmpty())
+				? FName(*Args[3])
+				: FName(TEXT("Console"));
+
+			int32 AppliedCount = 0;
+			const int32 AffectedSystems = ForEachStatusSystem(
+				[&](UOmniStatusSystem* StatusSystem)
+				{
+					if (StatusSystem->ApplyStatus(StatusTag, SourceId, DurationSeconds))
+					{
+						++AppliedCount;
+					}
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.statusfx apply | systems=%d applied=%d status=%s source=%s duration=%.2f"),
+				AffectedSystems,
+				AppliedCount,
+				*StatusTag.ToString(),
+				*SourceId.ToString(),
+				DurationSeconds
+			);
+			return;
+		}
+
+		if (Command == TEXT("remove"))
+		{
+			if (Args.Num() < 2)
+			{
+				UE_LOG(
+					LogOmniRuntime,
+					Warning,
+					TEXT("[Omni][Runtime][Console] Uso: omni.statusfx remove <StatusTag> [SourceId]")
+				);
+				return;
+			}
+
+			const FGameplayTag StatusTag = FGameplayTag::RequestGameplayTag(FName(*Args[1]), false);
+			if (!StatusTag.IsValid())
+			{
+				UE_LOG(
+					LogOmniRuntime,
+					Warning,
+					TEXT("[Omni][Runtime][Console] StatusTag invalida em omni.statusfx remove: %s"),
+					*Args[1]
+				);
+				return;
+			}
+
+			const FName SourceId = (Args.Num() > 2 && !Args[2].IsEmpty())
+				? FName(*Args[2])
+				: FName(TEXT("Console"));
+
+			int32 RemovedCount = 0;
+			const int32 AffectedSystems = ForEachStatusSystem(
+				[&](UOmniStatusSystem* StatusSystem)
+				{
+					if (StatusSystem->RemoveStatus(StatusTag, SourceId))
+					{
+						++RemovedCount;
+					}
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.statusfx remove | systems=%d removed=%d status=%s source=%s"),
+				AffectedSystems,
+				RemovedCount,
+				*StatusTag.ToString(),
+				*SourceId.ToString()
+			);
+			return;
+		}
+
+		int32 SystemIndex = 0;
+		ForEachStatusSystem(
+			[&](UOmniStatusSystem* StatusSystem)
+			{
+				++SystemIndex;
+				const TArray<FOmniStatusEntry> Snapshot = StatusSystem->GetStatusSnapshot();
+				UE_LOG(
+					LogOmniRuntime,
+					Log,
+					TEXT("[Omni][Runtime][Console] omni.statusfx status | system=%d entries=%d"),
+					SystemIndex,
+					Snapshot.Num()
+				);
+
+				for (const FOmniStatusEntry& Entry : Snapshot)
+				{
+					UE_LOG(
+						LogOmniRuntime,
+						Log,
+						TEXT("[Omni][Runtime][Console] omni.statusfx entry | status=%s source=%s stacks=%d remaining=%.2f"),
+						Entry.StatusTag.IsValid() ? *Entry.StatusTag.ToString() : TEXT("<none>"),
+						Entry.SourceId == NAME_None ? TEXT("<none>") : *Entry.SourceId.ToString(),
+						Entry.Stacks,
+						Entry.RemainingTimeSeconds
+					);
+				}
+			}
+		);
+	}
+
 	static FAutoConsoleCommand OmniDebugToggleCommand(
 		TEXT("omni.debug.toggle"),
 		TEXT("Alterna o overlay de debug do Omni."),
@@ -713,6 +857,12 @@ namespace OmniRuntimeConsole
 		TEXT("omni.animbridge"),
 		TEXT("Bridge de animacao Omni. Uso: omni.animbridge attach|status"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniAnimBridgeCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniStatusFxCommand(
+		TEXT("omni.statusfx"),
+		TEXT("Status effects Omni. Uso: omni.statusfx apply|remove|status"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniStatusFxCommand)
 	);
 }
 
