@@ -41,6 +41,12 @@ namespace OmniStatus
 	static const FName ExhaustedStateTagName(TEXT("Game.State.Exhausted"));
 	static const FName StatusHasteTagName(TEXT("Game.Status.Haste"));
 	static const FName StatusBurningTagName(TEXT("Game.Status.Burning"));
+	static const FName ModifiersSystemId(TEXT("Modifiers"));
+	static const FName ModifierCommandAdd(TEXT("AddModifier"));
+	static const FName ModifierCommandRemove(TEXT("RemoveModifier"));
+	static const FName ModifierHasteTagName(TEXT("Game.Modifier.HasteSpeed"));
+	static const FName ModifierMovementTargetTagName(TEXT("Game.ModTarget.MovementSpeed"));
+	static constexpr float HasteMovementSpeedMultiplier = 1.20f;
 	static const FName DefaultStatusSource(TEXT("Status.Runtime"));
 }
 
@@ -659,6 +665,7 @@ bool UOmniStatusSystem::ApplyStatus(const FGameplayTag StatusTag, FName SourceId
 		);
 	}
 
+	SyncStatusDrivenModifiers(StatusTag, SourceId, true);
 	SortActiveStatusEffects();
 	RefreshStatusTags();
 	RebuildStatusSnapshot(NowSeconds);
@@ -677,6 +684,7 @@ bool UOmniStatusSystem::RemoveStatus(const FGameplayTag StatusTag, const FName S
 	}
 
 	const FActiveStatusEffect Removed = ActiveStatusEffects[ExistingIndex];
+	SyncStatusDrivenModifiers(Removed.StatusTag, Removed.SourceId, false);
 	ActiveStatusEffects.RemoveAt(ExistingIndex);
 	SortActiveStatusEffects();
 	RefreshStatusTags();
@@ -982,6 +990,7 @@ void UOmniStatusSystem::TickStatusEffects(const double NowSeconds)
 
 		if (!Effect.bInfiniteDuration && NowSeconds + KINDA_SMALL_NUMBER >= Effect.ExpireTimeSeconds)
 		{
+			SyncStatusDrivenModifiers(Effect.StatusTag, Effect.SourceId, false);
 			UE_LOG(
 				LogOmniStatusSystem,
 				Log,
@@ -1051,6 +1060,77 @@ void UOmniStatusSystem::RefreshStatusTags()
 			ContextTags.AddTag(Effect.StatusTag);
 		}
 	}
+}
+
+void UOmniStatusSystem::SyncStatusDrivenModifiers(const FGameplayTag StatusTag, const FName SourceId, const bool bActive) const
+{
+	if (!Registry.IsValid())
+	{
+		return;
+	}
+
+	const FGameplayTag HasteStatusTag = FGameplayTag::RequestGameplayTag(OmniStatus::StatusHasteTagName, false);
+	if (!HasteStatusTag.IsValid() || StatusTag != HasteStatusTag)
+	{
+		return;
+	}
+
+	const FGameplayTag ModifierTag = FGameplayTag::RequestGameplayTag(OmniStatus::ModifierHasteTagName, false);
+	const FGameplayTag TargetTag = FGameplayTag::RequestGameplayTag(OmniStatus::ModifierMovementTargetTagName, false);
+	if (!ModifierTag.IsValid() || !TargetTag.IsValid())
+	{
+		return;
+	}
+
+	FOmniCommandMessage Command;
+	Command.SourceSystem = OmniStatus::SystemId;
+	Command.TargetSystem = OmniStatus::ModifiersSystemId;
+	Command.CommandName = bActive ? OmniStatus::ModifierCommandAdd : OmniStatus::ModifierCommandRemove;
+	Command.SetArgument(TEXT("ModifierTag"), ModifierTag.ToString());
+	Command.SetArgument(TEXT("SourceId"), BuildStatusModifierSourceId(StatusTag, SourceId).ToString());
+
+	if (bActive)
+	{
+		Command.SetArgument(TEXT("TargetTag"), TargetTag.ToString());
+		Command.SetArgument(TEXT("Operation"), TEXT("Mul"));
+		Command.SetArgument(TEXT("Magnitude"), FString::Printf(TEXT("%.3f"), OmniStatus::HasteMovementSpeedMultiplier));
+	}
+
+	const bool bDispatched = Registry->DispatchCommand(Command);
+	if (!bDispatched)
+	{
+		UE_LOG(
+			LogOmniStatusSystem,
+			Warning,
+			TEXT("[Omni][Status][ModifierBridge] DispatchFailed | status=%s source=%s command=%s"),
+			*StatusTag.ToString(),
+			*SourceId.ToString(),
+			*Command.CommandName.ToString()
+		);
+		return;
+	}
+
+	UE_LOG(
+		LogOmniStatusSystem,
+		Log,
+		TEXT("[Omni][Status][ModifierBridge] Dispatch | status=%s source=%s command=%s"),
+		*StatusTag.ToString(),
+		*SourceId.ToString(),
+		*Command.CommandName.ToString()
+	);
+}
+
+FName UOmniStatusSystem::BuildStatusModifierSourceId(const FGameplayTag StatusTag, const FName SourceId) const
+{
+	FString SourceText = SourceId == NAME_None ? OmniStatus::DefaultStatusSource.ToString() : SourceId.ToString();
+	SourceText.ReplaceInline(TEXT("."), TEXT("_"));
+	SourceText.ReplaceInline(TEXT(" "), TEXT("_"));
+
+	FString StatusText = StatusTag.ToString();
+	StatusText.ReplaceInline(TEXT("."), TEXT("_"));
+
+	const FString FinalSource = FString::Printf(TEXT("Status_%s_%s"), *StatusText, *SourceText);
+	return FName(*FinalSource);
 }
 
 FOmniAttributeValue* UOmniStatusSystem::FindAttributeMutable(const FGameplayTag AttributeTag)

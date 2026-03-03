@@ -113,6 +113,8 @@ private:
 	int32 FindActiveStatusIndex(FGameplayTag StatusTag, FName SourceId) const;
 	void SortActiveStatusEffects();
 	void RefreshStatusTags();
+	void SyncStatusDrivenModifiers(FGameplayTag StatusTag, FName SourceId, bool bActive) const;
+	FName BuildStatusModifierSourceId(FGameplayTag StatusTag, FName SourceId) const;
 	FOmniAttributeValue* FindAttributeMutable(FGameplayTag AttributeTag);
 	const FOmniAttributeValue* FindAttribute(FGameplayTag AttributeTag) const;
 	void ClampAttribute(FOmniAttributeValue& Attribute) const;
