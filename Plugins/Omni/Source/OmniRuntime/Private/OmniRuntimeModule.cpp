@@ -2,6 +2,7 @@
 
 #include "Avatar/OmniAvatarBridgeComponent.h"
 #include "Debug/OmniDebugSubsystem.h"
+#include "Systems/Animation/OmniAnimBridgeComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -569,6 +570,103 @@ namespace OmniRuntimeConsole
 		);
 	}
 
+	static void HandleOmniAnimBridgeCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		(void)World;
+
+		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
+		if (Command == TEXT("attach"))
+		{
+			int32 AttachedCount = 0;
+			const int32 LocalPawns = ForEachLocalPawn(
+				[&AttachedCount](APawn* Pawn)
+				{
+					if (!Pawn)
+					{
+						return;
+					}
+
+					UOmniAnimBridgeComponent* ExistingBridge = Pawn->FindComponentByClass<UOmniAnimBridgeComponent>();
+					if (ExistingBridge)
+					{
+						++AttachedCount;
+						return;
+					}
+
+					UOmniAnimBridgeComponent* NewBridge = NewObject<UOmniAnimBridgeComponent>(
+						Pawn,
+						UOmniAnimBridgeComponent::StaticClass(),
+						TEXT("OmniAnimBridge")
+					);
+					if (!NewBridge)
+					{
+						return;
+					}
+
+					Pawn->AddInstanceComponent(NewBridge);
+					NewBridge->RegisterComponent();
+					++AttachedCount;
+				}
+			);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Console] omni.animbridge attach | localPawns=%d bridgesReady=%d"),
+				LocalPawns,
+				AttachedCount
+			);
+			return;
+		}
+
+		if (Command != TEXT("status"))
+		{
+			UE_LOG(
+				LogOmniRuntime,
+				Warning,
+				TEXT("[Omni][Runtime][Console] Comando invalido para omni.animbridge: '%s' | Uso: omni.animbridge attach|status"),
+				*Command
+			);
+			return;
+		}
+
+		int32 ReadyCount = 0;
+		const int32 LocalPawns = ForEachLocalPawn(
+			[&ReadyCount](APawn* Pawn)
+			{
+				UOmniAnimBridgeComponent* Bridge = Pawn ? Pawn->FindComponentByClass<UOmniAnimBridgeComponent>() : nullptr;
+				if (!Bridge)
+				{
+					return;
+				}
+
+				if (Bridge->IsBridgeReady())
+				{
+					++ReadyCount;
+				}
+
+				UE_LOG(
+					LogOmniRuntime,
+					Log,
+					TEXT("[Omni][Runtime][Console] omni.animbridge status | owner=%s ready=%s speed=%.2f sprinting=%s exhausted=%s"),
+					*GetNameSafe(Pawn),
+					Bridge->IsBridgeReady() ? TEXT("True") : TEXT("False"),
+					Bridge->GetDebugSpeed(),
+					Bridge->GetDebugIsSprinting() ? TEXT("True") : TEXT("False"),
+					Bridge->GetDebugIsExhausted() ? TEXT("True") : TEXT("False")
+				);
+			}
+		);
+
+		UE_LOG(
+			LogOmniRuntime,
+			Log,
+			TEXT("[Omni][Runtime][Console] omni.animbridge status summary | localPawns=%d bridgesReady=%d"),
+			LocalPawns,
+			ReadyCount
+		);
+	}
+
 	static FAutoConsoleCommand OmniDebugToggleCommand(
 		TEXT("omni.debug.toggle"),
 		TEXT("Alterna o overlay de debug do Omni."),
@@ -609,6 +707,12 @@ namespace OmniRuntimeConsole
 		TEXT("omni.avatarbridge"),
 		TEXT("Bridge de avatar Omni. Uso: omni.avatarbridge attach|status"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniAvatarBridgeCommand)
+	);
+
+	static FAutoConsoleCommandWithWorldAndArgs OmniAnimBridgeCommand(
+		TEXT("omni.animbridge"),
+		TEXT("Bridge de animacao Omni. Uso: omni.animbridge attach|status"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniAnimBridgeCommand)
 	);
 }
 
