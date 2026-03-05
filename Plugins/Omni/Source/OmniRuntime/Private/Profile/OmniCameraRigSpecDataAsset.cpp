@@ -1,0 +1,1 @@
+#include "Profile/OmniCameraRigSpecDataAsset.h"

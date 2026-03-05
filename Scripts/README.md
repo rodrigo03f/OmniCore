@@ -199,6 +199,14 @@ Opcional:
 powershell -ExecutionPolicy Bypass -File .\Scripts\zen_hygiene.ps1 -KillUnrealEditor
 ```
 
+## 0.8) Validacao de assets de camera (SYS_Camera_U1)
+
+Valida config canônica em `DefaultGame.ini` e presença do `.uasset` do `DefaultRig`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\omni_validate_camera_assets.ps1
+```
+
 ## 1) Watch build/runtime errors live
 
 ```powershell
