@@ -20,6 +20,11 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "OmniExperimental",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "OmniGAS",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
