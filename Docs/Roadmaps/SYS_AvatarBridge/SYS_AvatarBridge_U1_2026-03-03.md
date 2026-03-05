@@ -90,3 +90,16 @@ Referência:
   - `feat(SYS_AvatarBridge_U1): add avatar integration bridge (CMC backend)`
 - Evidências (logs):
   - `Saved/Logs/OmniSandbox.log:979-986`
+
+---
+
+## 7) Integração com SYS_AnimBridge (P4 - 2026-03-05)
+
+- `AvatarBridge` e `AnimBridge` convivem no mesmo host sem acoplamento direto entre systems.
+- Responsabilidades:
+  - `AvatarBridge`: backend corporal (CMC), context tags e HUD bootstrap.
+  - `AnimBridge`: escrita do frame canônico no `UOmniAnimInstanceBase`.
+- Evidências de integração (headless):
+  - com CMC: `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_cmc.log:985`
+  - sem CMC (fallback): `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_fallback.log:983`
+  - troca de avatar: `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_swap.log:988`

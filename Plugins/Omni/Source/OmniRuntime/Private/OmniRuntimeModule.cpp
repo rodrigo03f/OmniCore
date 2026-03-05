@@ -3,13 +3,18 @@
 #include "Avatar/OmniAvatarBridgeComponent.h"
 #include "Debug/OmniDebugSubsystem.h"
 #include "Systems/Animation/OmniAnimBridgeComponent.h"
+#include "Systems/Animation/OmniAnimInstanceBase.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "GameplayTagsManager.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Systems/Camera/OmniCameraSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
 #include "Systems/Modifiers/OmniModifiersSystem.h"
@@ -303,6 +308,170 @@ namespace OmniRuntimeConsole
 		}
 
 		return Count;
+	}
+
+	static APlayerController* ResolveLocalPlayerController(UWorld* PreferredWorld)
+	{
+		if (PreferredWorld)
+		{
+			if (UGameInstance* GameInstance = PreferredWorld->GetGameInstance())
+			{
+				if (APlayerController* PlayerController = GameInstance->GetFirstLocalPlayerController())
+				{
+					return PlayerController;
+				}
+			}
+
+			if (APlayerController* FirstController = PreferredWorld->GetFirstPlayerController())
+			{
+				return FirstController;
+			}
+		}
+
+		if (!GEngine)
+		{
+			return nullptr;
+		}
+
+		for (const FWorldContext& WorldContext : GEngine->GetWorldContexts())
+		{
+			UGameInstance* GameInstance = WorldContext.OwningGameInstance;
+			if (!GameInstance)
+			{
+				continue;
+			}
+
+			if (APlayerController* PlayerController = GameInstance->GetFirstLocalPlayerController())
+			{
+				return PlayerController;
+			}
+		}
+
+		return nullptr;
+	}
+
+	static USkeletalMesh* ResolveAnimBridgeSmokeMesh()
+	{
+		static TWeakObjectPtr<USkeletalMesh> CachedMesh;
+		if (CachedMesh.IsValid())
+		{
+			return CachedMesh.Get();
+		}
+
+		static const TCHAR* CandidateMeshPaths[] = {
+			TEXT("/Engine/Characters/Mannequins/Meshes/SKM_Manny.SKM_Manny"),
+			TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube")
+		};
+
+		for (const TCHAR* CandidatePath : CandidateMeshPaths)
+		{
+			if (USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, CandidatePath))
+			{
+				CachedMesh = Mesh;
+				return Mesh;
+			}
+		}
+
+		return nullptr;
+	}
+
+	static void ConfigureAnimBridgeSmokeCharacter(ACharacter* Character)
+	{
+		if (!Character)
+		{
+			return;
+		}
+
+		USkeletalMeshComponent* MeshComponent = Character->GetMesh();
+		if (!MeshComponent)
+		{
+			return;
+		}
+
+		if (USkeletalMesh* Mesh = ResolveAnimBridgeSmokeMesh())
+		{
+			MeshComponent->SetSkeletalMesh(Mesh);
+		}
+
+		MeshComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+		MeshComponent->SetAnimInstanceClass(UOmniAnimInstanceBase::StaticClass());
+		MeshComponent->InitAnim(true);
+	}
+
+	static APawn* SpawnAndPossessLocalPawn(UWorld* PreferredWorld, UClass* PawnClass, const bool bConfigureAnimCharacter)
+	{
+		if (!PawnClass)
+		{
+			return nullptr;
+		}
+
+		APlayerController* PlayerController = ResolveLocalPlayerController(PreferredWorld);
+		if (!PlayerController || !PlayerController->GetWorld())
+		{
+			return nullptr;
+		}
+
+		UWorld* WorldToUse = PlayerController->GetWorld();
+		APawn* PreviousPawn = PlayerController->GetPawn();
+		const FTransform SpawnTransform = PreviousPawn ? PreviousPawn->GetActorTransform() : FTransform::Identity;
+
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = PlayerController;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		APawn* SpawnedPawn = WorldToUse->SpawnActor<APawn>(PawnClass, SpawnTransform, SpawnParameters);
+		if (!SpawnedPawn)
+		{
+			return nullptr;
+		}
+
+		if (bConfigureAnimCharacter)
+		{
+			ConfigureAnimBridgeSmokeCharacter(Cast<ACharacter>(SpawnedPawn));
+		}
+
+		PlayerController->Possess(SpawnedPawn);
+
+		if (PreviousPawn && PreviousPawn != SpawnedPawn)
+		{
+			PreviousPawn->Destroy();
+		}
+
+		return SpawnedPawn;
+	}
+
+	template <typename TComponent>
+	static TComponent* EnsureLocalPawnComponent(APawn* Pawn, const FName ComponentName)
+	{
+		if (!Pawn)
+		{
+			return nullptr;
+		}
+
+		if (TComponent* Existing = Pawn->FindComponentByClass<TComponent>())
+		{
+			return Existing;
+		}
+
+		TComponent* NewComponent = NewObject<TComponent>(Pawn, TComponent::StaticClass(), ComponentName);
+		if (!NewComponent)
+		{
+			return nullptr;
+		}
+
+		Pawn->AddInstanceComponent(NewComponent);
+		NewComponent->RegisterComponent();
+		return NewComponent;
+	}
+
+	static void TickAnimBridgeForSmoke(UOmniAnimBridgeComponent* AnimBridge)
+	{
+		if (!AnimBridge)
+		{
+			return;
+		}
+
+		AnimBridge->TickComponent(0.0f, LEVELTICK_All, nullptr);
 	}
 
 	static void HandleOmniDebugToggleCommand()
@@ -608,8 +777,6 @@ namespace OmniRuntimeConsole
 
 	static void HandleOmniAnimBridgeCommand(const TArray<FString>& Args, UWorld* World)
 	{
-		(void)World;
-
 		const FString Command = Args.Num() > 0 ? Args[0].ToLower() : TEXT("status");
 		if (Command == TEXT("attach"))
 		{
@@ -655,12 +822,97 @@ namespace OmniRuntimeConsole
 			return;
 		}
 
+		if (Command == TEXT("smoke_cmc"))
+		{
+			APawn* SmokePawn = SpawnAndPossessLocalPawn(World, ACharacter::StaticClass(), true);
+			UOmniAvatarBridgeComponent* AvatarBridge = EnsureLocalPawnComponent<UOmniAvatarBridgeComponent>(
+				SmokePawn,
+				TEXT("OmniAvatarBridge")
+			);
+			UOmniAnimBridgeComponent* AnimBridge = EnsureLocalPawnComponent<UOmniAnimBridgeComponent>(
+				SmokePawn,
+				TEXT("OmniAnimBridge")
+			);
+			TickAnimBridgeForSmoke(AnimBridge);
+
+			const ACharacter* SmokeCharacter = Cast<ACharacter>(SmokePawn);
+			const bool bHasCmc = SmokeCharacter && SmokeCharacter->GetCharacterMovement() != nullptr;
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Smoke][AnimBridge] smoke_cmc | owner=%s avatarBridge=%s animBridgeReady=%s hasCMC=%s omniAnimInstance=%s"),
+				*GetNameSafe(SmokePawn),
+				AvatarBridge ? TEXT("True") : TEXT("False"),
+				(AnimBridge && AnimBridge->IsBridgeReady()) ? TEXT("True") : TEXT("False"),
+				bHasCmc ? TEXT("True") : TEXT("False"),
+				(AnimBridge && AnimBridge->IsOmniAnimInstanceResolved()) ? TEXT("True") : TEXT("False")
+			);
+			return;
+		}
+
+		if (Command == TEXT("smoke_fallback"))
+		{
+			APawn* SmokePawn = SpawnAndPossessLocalPawn(World, APawn::StaticClass(), false);
+			UOmniAvatarBridgeComponent* AvatarBridge = EnsureLocalPawnComponent<UOmniAvatarBridgeComponent>(
+				SmokePawn,
+				TEXT("OmniAvatarBridge")
+			);
+			UOmniAnimBridgeComponent* AnimBridge = EnsureLocalPawnComponent<UOmniAnimBridgeComponent>(
+				SmokePawn,
+				TEXT("OmniAnimBridge")
+			);
+			TickAnimBridgeForSmoke(AnimBridge);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Smoke][AnimBridge] smoke_fallback | owner=%s avatarBridge=%s animBridgeReady=%s hasCMC=False omniAnimInstance=%s"),
+				*GetNameSafe(SmokePawn),
+				AvatarBridge ? TEXT("True") : TEXT("False"),
+				(AnimBridge && AnimBridge->IsBridgeReady()) ? TEXT("True") : TEXT("False"),
+				(AnimBridge && AnimBridge->IsOmniAnimInstanceResolved()) ? TEXT("True") : TEXT("False")
+			);
+			return;
+		}
+
+		if (Command == TEXT("smoke_swap"))
+		{
+			APawn* FirstPawn = SpawnAndPossessLocalPawn(World, ACharacter::StaticClass(), true);
+			EnsureLocalPawnComponent<UOmniAvatarBridgeComponent>(FirstPawn, TEXT("OmniAvatarBridge"));
+			UOmniAnimBridgeComponent* FirstBridge = EnsureLocalPawnComponent<UOmniAnimBridgeComponent>(
+				FirstPawn,
+				TEXT("OmniAnimBridge")
+			);
+			TickAnimBridgeForSmoke(FirstBridge);
+			const FString FirstOwnerName = GetNameSafe(FirstPawn);
+			const bool bFirstReady = FirstBridge && FirstBridge->IsBridgeReady();
+
+			APawn* SecondPawn = SpawnAndPossessLocalPawn(World, ACharacter::StaticClass(), true);
+			EnsureLocalPawnComponent<UOmniAvatarBridgeComponent>(SecondPawn, TEXT("OmniAvatarBridge"));
+			UOmniAnimBridgeComponent* SecondBridge = EnsureLocalPawnComponent<UOmniAnimBridgeComponent>(
+				SecondPawn,
+				TEXT("OmniAnimBridge")
+			);
+			TickAnimBridgeForSmoke(SecondBridge);
+
+			UE_LOG(
+				LogOmniRuntime,
+				Log,
+				TEXT("[Omni][Runtime][Smoke][AnimBridge] smoke_swap | firstOwner=%s firstReady=%s secondOwner=%s secondReady=%s"),
+				*FirstOwnerName,
+				bFirstReady ? TEXT("True") : TEXT("False"),
+				*GetNameSafe(SecondPawn),
+				(SecondBridge && SecondBridge->IsBridgeReady()) ? TEXT("True") : TEXT("False")
+			);
+			return;
+		}
+
 		if (Command != TEXT("status"))
 		{
 			UE_LOG(
 				LogOmniRuntime,
 				Warning,
-				TEXT("[Omni][Runtime][Console] Comando invalido para omni.animbridge: '%s' | Uso: omni.animbridge attach|status"),
+				TEXT("[Omni][Runtime][Console] Comando invalido para omni.animbridge: '%s' | Uso: omni.animbridge attach|status|smoke_cmc|smoke_fallback|smoke_swap"),
 				*Command
 			);
 			return;
@@ -684,9 +936,11 @@ namespace OmniRuntimeConsole
 				UE_LOG(
 					LogOmniRuntime,
 					Log,
-					TEXT("[Omni][Runtime][Console] omni.animbridge status | owner=%s ready=%s speed=%.2f sprinting=%s exhausted=%s"),
+					TEXT("[Omni][Runtime][Console] omni.animbridge status | owner=%s ready=%s cmc=%s omniAnimInstance=%s speed=%.2f sprinting=%s exhausted=%s"),
 					*GetNameSafe(Pawn),
 					Bridge->IsBridgeReady() ? TEXT("True") : TEXT("False"),
+					Bridge->IsCharacterMovementResolved() ? TEXT("True") : TEXT("False"),
+					Bridge->IsOmniAnimInstanceResolved() ? TEXT("True") : TEXT("False"),
 					Bridge->GetDebugSpeed(),
 					Bridge->GetDebugIsSprinting() ? TEXT("True") : TEXT("False"),
 					Bridge->GetDebugIsExhausted() ? TEXT("True") : TEXT("False")
@@ -1037,7 +1291,7 @@ namespace OmniRuntimeConsole
 
 	static FAutoConsoleCommandWithWorldAndArgs OmniAnimBridgeCommand(
 		TEXT("omni.animbridge"),
-		TEXT("Bridge de animacao Omni. Uso: omni.animbridge attach|status"),
+		TEXT("Bridge de animacao Omni. Uso: omni.animbridge attach|status|smoke_cmc|smoke_fallback|smoke_swap"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleOmniAnimBridgeCommand)
 	);
 

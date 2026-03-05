@@ -31,10 +31,10 @@
 
 ## NEXT
 
-- [ ] RM_CharacterAnimPolish_P4
+- [x] RM_CharacterAnimPolish_P4
 - [ ] RM_MotionMatching_RnD_P5
 
 ## Notas rápidas
 
-- A pasta de docs do AnimBridge ainda usa nome histórico `SYS_AnimBrigde` (correção planejada no P4).
+- A pasta de docs do AnimBridge foi normalizada para `SYS_AnimBridge` no P4.
 - Este arquivo é um painel de leitura rápida; os detalhes de evidência ficam nos MDs de cada sistema/RM.

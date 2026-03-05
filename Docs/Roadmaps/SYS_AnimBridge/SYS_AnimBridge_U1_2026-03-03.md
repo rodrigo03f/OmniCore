@@ -65,10 +65,28 @@ Implementar o mini-sistema de integração Omni → AnimBP:
   - Log: `[Omni][Runtime][Console] omni.animbridge attach | localPawns=1 bridgesReady=1`
   - Log: `[Omni][Runtime][Console] omni.animbridge status summary | localPawns=1 bridgesReady=0`
 - [x] Contrato bridge-only preservado
-  - `UOmniAnimBridgeComponent` escreve variáveis em `UOmniAnimInstanceBase`; AnimBP não consulta systems diretamente.
+  - `UOmniAnimBridgeComponent` escreve estado via `UOmniAnimInstanceBase::ApplyBridgeFrame(...)`; AnimBP não consulta systems diretamente.
 
 ---
 
 ## 6) Commit
 
 `feat(SYS_AnimBridge_U1): add anim instance base + bridge component`
+
+---
+
+## 7) Revalidação P4 (2026-03-05)
+
+- [x] Renomear docs `SYS_AnimBrigde` -> `SYS_AnimBridge` e corrigir referências.
+- [x] Contrato explícito AnimBridge -> AnimInstance (`ApplyBridgeFrame`) e status com sinal de CMC/AnimInstance.
+- [x] Build PASS (`omni_build_dev.ps1`).
+- [x] Gate PASS (`omni_conformance_gate.ps1`).
+- [x] Smoke CMC PASS:
+  - `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_cmc.log:985`
+  - `... smoke_cmc | owner=Character_0 ... animBridgeReady=True hasCMC=True omniAnimInstance=True`
+- [x] Smoke fallback sem CMC PASS:
+  - `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_fallback.log:983`
+  - `... smoke_fallback | owner=Pawn_0 ... animBridgeReady=False hasCMC=False omniAnimInstance=False`
+- [x] Smoke troca de avatar PASS:
+  - `Saved/Logs/Automation/CharacterAnimPolishP4/smoke_swap.log:988`
+  - `... smoke_swap | firstOwner=Character_0 firstReady=True secondOwner=Character_1 secondReady=True`

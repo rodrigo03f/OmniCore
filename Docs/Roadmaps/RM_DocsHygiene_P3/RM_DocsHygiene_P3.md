@@ -46,9 +46,9 @@ conhecidas
 
 ### 5. Dívida conhecida
 
-Pasta atual: SYS_AnimBrigde
+Pasta antiga: SYS_AnimBrigde
 
-Nome correto futuro: SYS_AnimBridge
+Status: resolvido no `RM_CharacterAnimPolish_P4` (renomeado para `SYS_AnimBridge`).
 
 ## Critérios de aceite
 

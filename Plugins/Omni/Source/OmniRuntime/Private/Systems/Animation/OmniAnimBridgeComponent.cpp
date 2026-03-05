@@ -96,6 +96,11 @@ bool UOmniAnimBridgeComponent::GetDebugIsExhausted() const
 	return bDebugIsExhausted;
 }
 
+bool UOmniAnimBridgeComponent::IsCharacterMovementResolved() const
+{
+	return CharacterMovement.IsValid();
+}
+
 void UOmniAnimBridgeComponent::ResolveHost()
 {
 	if (!HostPawn.IsValid())
@@ -177,54 +182,86 @@ void UOmniAnimBridgeComponent::ResolveAnimationTargets()
 		return;
 	}
 
+	USkeletalMeshComponent* ResolvedMesh = nullptr;
+	if (ACharacter* Character = Cast<ACharacter>(HostPawn.Get()))
+	{
+		ResolvedMesh = Character->GetMesh();
+	}
+	if (!ResolvedMesh)
+	{
+		ResolvedMesh = HostPawn->FindComponentByClass<USkeletalMeshComponent>();
+	}
+
+	if (SkeletalMeshComponent.Get() != ResolvedMesh)
+	{
+		USkeletalMeshComponent* PreviousMesh = SkeletalMeshComponent.Get();
+		SkeletalMeshComponent = ResolvedMesh;
+		OmniAnimInstance.Reset();
+		bLoggedReady = false;
+		if (PreviousMesh != nullptr && SkeletalMeshComponent.IsValid())
+		{
+			UE_LOG(
+				LogOmniAnimBridgeComponent,
+				Log,
+				TEXT("[Omni][AnimBridge][Rebind] MeshChanged | owner=%s previousMesh=%s newMesh=%s"),
+				*GetNameSafe(HostPawn.Get()),
+				*GetNameSafe(PreviousMesh),
+				*GetNameSafe(SkeletalMeshComponent.Get())
+			);
+		}
+	}
+
 	if (!SkeletalMeshComponent.IsValid())
 	{
-		if (ACharacter* Character = Cast<ACharacter>(HostPawn.Get()))
+		if (!bLoggedMissingMesh)
 		{
-			SkeletalMeshComponent = Character->GetMesh();
+			bLoggedMissingMesh = true;
+			UE_LOG(
+				LogOmniAnimBridgeComponent,
+				Warning,
+				TEXT("[Omni][AnimBridge][Fallback] MissingSkeletalMesh | owner=%s"),
+				*GetNameSafe(HostPawn.Get())
+			);
 		}
-		if (!SkeletalMeshComponent.IsValid())
-		{
-			SkeletalMeshComponent = HostPawn->FindComponentByClass<USkeletalMeshComponent>();
-		}
-
-		if (!SkeletalMeshComponent.IsValid())
-		{
-			if (!bLoggedMissingMesh)
-			{
-				bLoggedMissingMesh = true;
-				UE_LOG(
-					LogOmniAnimBridgeComponent,
-					Warning,
-					TEXT("[Omni][AnimBridge][Fallback] MissingSkeletalMesh | owner=%s"),
-					*GetNameSafe(HostPawn.Get())
-				);
-			}
-			return;
-		}
+		return;
 	}
 
 	bLoggedMissingMesh = false;
 
-	if (!OmniAnimInstance.IsValid())
+	UAnimInstance* CurrentAnimInstance = SkeletalMeshComponent->GetAnimInstance();
+	UOmniAnimInstanceBase* CurrentOmniAnimInstance = Cast<UOmniAnimInstanceBase>(CurrentAnimInstance);
+	if (!CurrentOmniAnimInstance)
 	{
-		UAnimInstance* AnimInstance = SkeletalMeshComponent->GetAnimInstance();
-		OmniAnimInstance = Cast<UOmniAnimInstanceBase>(AnimInstance);
-		if (!OmniAnimInstance.IsValid())
+		if (!bLoggedInvalidAnimInstance)
 		{
-			if (!bLoggedInvalidAnimInstance)
-			{
-				bLoggedInvalidAnimInstance = true;
-				UE_LOG(
-					LogOmniAnimBridgeComponent,
-					Warning,
-					TEXT("[Omni][AnimBridge][Fallback] InvalidAnimInstance | owner=%s animClass=%s expected=%s"),
-					*GetNameSafe(HostPawn.Get()),
-					*GetNameSafe(AnimInstance ? AnimInstance->GetClass() : nullptr),
-					*UOmniAnimInstanceBase::StaticClass()->GetName()
-				);
-			}
-			return;
+			bLoggedInvalidAnimInstance = true;
+			UE_LOG(
+				LogOmniAnimBridgeComponent,
+				Warning,
+				TEXT("[Omni][AnimBridge][Fallback] InvalidAnimInstance | owner=%s animClass=%s expected=%s"),
+				*GetNameSafe(HostPawn.Get()),
+				*GetNameSafe(CurrentAnimInstance ? CurrentAnimInstance->GetClass() : nullptr),
+				*UOmniAnimInstanceBase::StaticClass()->GetName()
+			);
+		}
+		return;
+	}
+
+	if (OmniAnimInstance.Get() != CurrentOmniAnimInstance)
+	{
+		UOmniAnimInstanceBase* PreviousAnimInstance = OmniAnimInstance.Get();
+		OmniAnimInstance = CurrentOmniAnimInstance;
+		bLoggedReady = false;
+		if (PreviousAnimInstance != nullptr)
+		{
+			UE_LOG(
+				LogOmniAnimBridgeComponent,
+				Log,
+				TEXT("[Omni][AnimBridge][Rebind] AnimInstanceChanged | owner=%s previous=%s current=%s"),
+				*GetNameSafe(HostPawn.Get()),
+				*GetNameSafe(PreviousAnimInstance),
+				*GetNameSafe(OmniAnimInstance.Get())
+			);
 		}
 	}
 
@@ -255,15 +292,17 @@ void UOmniAnimBridgeComponent::ApplyOmniState()
 	bDebugIsSprinting = MovementSystem.IsValid() && MovementSystem->IsSprinting();
 	bDebugIsExhausted = StatusSystem.IsValid() && StatusSystem->IsExhausted();
 
-	OmniAnimInstance->Speed = DebugSpeed;
-	OmniAnimInstance->bIsSprinting = bDebugIsSprinting;
-	OmniAnimInstance->bIsExhausted = bDebugIsExhausted;
-	OmniAnimInstance->ActiveAnimSetTag = DefaultAnimSetTag;
+	FOmniAnimBridgeFrame BridgeFrame;
+	BridgeFrame.Speed = DebugSpeed;
+	BridgeFrame.bIsSprinting = bDebugIsSprinting;
+	BridgeFrame.bIsExhausted = bDebugIsExhausted;
+	BridgeFrame.ActiveAnimSetTag = DefaultAnimSetTag;
+	ApplyBodyFallbackSlots(BridgeFrame);
 
-	ApplyBodyFallbackSlots();
+	OmniAnimInstance->ApplyBridgeFrame(BridgeFrame);
 }
 
-void UOmniAnimBridgeComponent::ApplyBodyFallbackSlots()
+void UOmniAnimBridgeComponent::ApplyBodyFallbackSlots(FOmniAnimBridgeFrame& InOutBridgeFrame) const
 {
 	if (!OmniAnimInstance.IsValid() || !HostPawn.IsValid())
 	{
@@ -285,7 +324,7 @@ void UOmniAnimBridgeComponent::ApplyBodyFallbackSlots()
 		bIsCrouching = Character->bIsCrouched;
 	}
 
-	OmniAnimInstance->bIsInAir = bIsInAir;
-	OmniAnimInstance->bIsCrouching = bIsCrouching;
-	OmniAnimInstance->VerticalSpeed = VerticalSpeed;
+	InOutBridgeFrame.bIsInAir = bIsInAir;
+	InOutBridgeFrame.bIsCrouching = bIsCrouching;
+	InOutBridgeFrame.VerticalSpeed = VerticalSpeed;
 }

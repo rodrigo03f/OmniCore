@@ -3,11 +3,16 @@
 namespace OmniAnimInstanceBase
 {
 	static const FName DefaultAnimSetTagName(TEXT("Game.Anim.Set.Default"));
+
+	static FGameplayTag ResolveDefaultAnimSetTag()
+	{
+		return FGameplayTag::RequestGameplayTag(DefaultAnimSetTagName, false);
+	}
 }
 
 UOmniAnimInstanceBase::UOmniAnimInstanceBase()
 {
-	ActiveAnimSetTag = FGameplayTag::RequestGameplayTag(OmniAnimInstanceBase::DefaultAnimSetTagName, false);
+	ActiveAnimSetTag = OmniAnimInstanceBase::ResolveDefaultAnimSetTag();
 }
 
 void UOmniAnimInstanceBase::NativeInitializeAnimation()
@@ -16,6 +21,19 @@ void UOmniAnimInstanceBase::NativeInitializeAnimation()
 
 	if (!ActiveAnimSetTag.IsValid())
 	{
-		ActiveAnimSetTag = FGameplayTag::RequestGameplayTag(OmniAnimInstanceBase::DefaultAnimSetTagName, false);
+		ActiveAnimSetTag = OmniAnimInstanceBase::ResolveDefaultAnimSetTag();
 	}
+}
+
+void UOmniAnimInstanceBase::ApplyBridgeFrame(const FOmniAnimBridgeFrame& BridgeFrame)
+{
+	Speed = BridgeFrame.Speed;
+	bIsSprinting = BridgeFrame.bIsSprinting;
+	bIsExhausted = BridgeFrame.bIsExhausted;
+	bIsCrouching = BridgeFrame.bIsCrouching;
+	bIsInAir = BridgeFrame.bIsInAir;
+	VerticalSpeed = BridgeFrame.VerticalSpeed;
+	ActiveAnimSetTag = BridgeFrame.ActiveAnimSetTag.IsValid()
+		? BridgeFrame.ActiveAnimSetTag
+		: OmniAnimInstanceBase::ResolveDefaultAnimSetTag();
 }

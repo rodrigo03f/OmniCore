@@ -8,6 +8,7 @@
 class APawn;
 class UCharacterMovementComponent;
 class UOmniAnimInstanceBase;
+struct FOmniAnimBridgeFrame;
 class UOmniMovementSystem;
 class UOmniStatusSystem;
 class UOmniSystemRegistrySubsystem;
@@ -52,12 +53,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Omni|AnimBridge")
 	bool GetDebugIsExhausted() const;
 
+	UFUNCTION(BlueprintPure, Category = "Omni|AnimBridge")
+	bool IsCharacterMovementResolved() const;
+
 private:
 	void ResolveHost();
 	void ResolveRegistryAndSystems();
 	void ResolveAnimationTargets();
 	void ApplyOmniState();
-	void ApplyBodyFallbackSlots();
+	void ApplyBodyFallbackSlots(FOmniAnimBridgeFrame& InOutBridgeFrame) const;
 
 private:
 	UPROPERTY(Transient)
