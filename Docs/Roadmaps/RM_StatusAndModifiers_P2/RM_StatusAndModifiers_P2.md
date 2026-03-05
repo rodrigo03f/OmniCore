@@ -60,7 +60,7 @@ Critério de conclusão:
 ## SYS_Modifiers U1 — Pipeline determinístico
 
 - [x] Definir conceito de Modifier (Tag + operação + magnitude + source + duration opcional)
-- [ ] Pipeline determinístico:
+- [x] Pipeline determinístico:
   - BaseValue
   - Additives (somados em ordem estável)
   - Multipliers (produto em ordem estável)

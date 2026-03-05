@@ -83,7 +83,13 @@ Responsabilidade:
 Aplicação de CameraRigSpec via Mode tags.
 
 Status de execução:
-- PENDENTE
+- CONCLUÍDO em 02-03-2026
+- Evidência runtime: `systems=4` no `OmniRegistry`
+- Validação automática implementada (`Scripts/omni_validate_camera_assets.ps1`)
+
+✅ Conteúdo resolvido:
+- Asset real presente: `/Game/Data/Camera/DA_CameraRig_TPS_Default`
+- Validator: `omni_validate_camera_assets.ps1` PASS
 
 Critério para avançar:
 
@@ -112,7 +118,7 @@ antes que todos tenham U1 fechado.
 
 # 🚀 Próximo Marco
 
-Início oficial da execução desta ordem:
-03-03-26
+Fechamento da trilha U1 da RM_InteligenciaSistemica:
+02-03-2026
 
-Roadmap preparado para execução disciplinada e progressiva.
+Roadmap U1 encerrado, pronto para planejamento de U2.

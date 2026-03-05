@@ -50,18 +50,6 @@ Referência:
 
 ## 4) Checklist
 
-- [ ] Criar componente e registrar para uso em BP/Editor
-- [ ] Resolver host (Character/Pawn) e componentes principais (CMC, Mesh, Camera se existir)
-- [ ] Construir ContextTags a partir de:
-  - Input/intenção (SprintRequested) — mínimo
-  - Tags fixas/config (Camera.Mode.TPS) — mínimo
-- [ ] Ler outputs do runtime (snapshots/tags) e aplicar no corpo:
-  - EffectiveSpeed → CMC.MaxWalkSpeed
-- [ ] Garantir HUD:
-  - Se HUD não existir, instanciar via config (reusar mecanismo atual do SYS_UI_HUD)
-- [ ] Logs:
-  - Boot: mostrando host + backend
-  - Fallback: se CMC não encontrado ou host inválido
 - [x] Criar componente e registrar para uso em BP/Editor
 - [x] Resolver host (Character/Pawn) e componentes principais (CMC, Mesh, Camera se existir)
 - [x] Construir ContextTags a partir de:

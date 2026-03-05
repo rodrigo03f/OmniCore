@@ -1,6 +1,6 @@
 # RM_PrototypePlayable_P1 — Prototype Jogável (Sprint + HP + HUD)
 
-Status: DESIGN FROZEN  
+Status: CONCLUÍDO  
 Roadmap: RM_PrototypePlayable_P1  
 Fase: Transformar MVP técnico em protótipo jogável mínimo  
 Data: 02-03-26  
@@ -124,3 +124,26 @@ Protótipo deve ser jogável e visualmente validável.
 ---
 
 Roadmap congelado em: 02-03-26
+
+---
+
+## ✅ Fechamento — RM_PrototypePlayable_P1
+
+Data: 2026-03-02  
+Status: CONCLUÍDO
+
+### Entregas confirmadas
+- [PASS] SYS_Attributes genérico (HP + Stamina) com recipe real carregado via config (sem fallback)
+- [PASS] Loop Stamina completo: drain → exhausted → delay → regen → recover
+- [PASS] SYS_Movement Walk/Sprint com tags canônicas + speed pipeline
+- [PASS] SYS_ActionGate canônico bloqueando sprint por exhausted
+- [PASS] Console commands: `omni.damage` e `omni.heal`
+- [PASS] HUD mínima (HP + Stamina + EXHAUSTED) consumindo snapshot via Bridge
+
+### Evidências
+- Build: `omni_build_dev.ps1` OK
+- Conformance: `omni_conformance_gate.ps1` PASS
+- Smoke headless: OK (`omni.sprint start/status/stop`, `omni.damage`, `omni.heal`, `quit`)
+- PIE: barras de HP/Stamina respondem e EXHAUSTED aparece/some conforme stamina
+
+Conclusão: protótipo jogável mínimo validado end-to-end com feedback visual e loop de gameplay funcional.
