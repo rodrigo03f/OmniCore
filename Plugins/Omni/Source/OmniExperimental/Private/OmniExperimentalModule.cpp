@@ -1,6 +1,6 @@
 #include "OmniExperimentalModule.h"
 
-#include "MotionMatching/OmniMotionMatchingSubsystem.h"
+#include "Systems/MotionMatching/OmniMotionMatchingSubsystem.h"
 
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
