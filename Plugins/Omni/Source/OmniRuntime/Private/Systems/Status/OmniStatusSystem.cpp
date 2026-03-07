@@ -3,7 +3,6 @@
 #include "Debug/OmniDebugSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Manifest/OmniManifest.h"
-#include "Systems/Attributes/OmniAttributesSystem.h"
 #include "Systems/OmniClockSubsystem.h"
 #include "Systems/OmniSystemMessageSchemas.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
@@ -75,25 +74,11 @@ void UOmniStatusSystem::InitializeSystem_Implementation(UObject* WorldContextObj
 		return;
 	}
 
-	if (!ResolveAttributesSystem())
-	{
-		const FString AttributesError = TEXT("[Omni][Status][Init] SYS_Attributes obrigatorio nao encontrado.");
-		UE_LOG(LogOmniStatusSystem, Error, TEXT("%s"), *AttributesError);
-		if (DebugSubsystem.IsValid())
-		{
-			DebugSubsystem->SetMetric(OmniStatus::DebugMetricProfileStatus, TEXT("Failed"));
-			DebugSubsystem->LogError(OmniStatus::CategoryName, AttributesError, OmniStatus::SourceName);
-		}
-		return;
-	}
-
 	InitializeStatusRecipes();
 	ActiveStatusEffects.Reset();
-	ContextTags.Reset();
 	StateTags.Reset();
 	LastClockSeconds = ClockSubsystem->GetSimTime();
 	RefreshStatusTags();
-	RefreshCombinedStateTags();
 	RebuildStatusSnapshot(LastClockSeconds);
 	PublishTelemetry();
 	SetInitializationResult(true);
@@ -111,10 +96,8 @@ void UOmniStatusSystem::ShutdownSystem_Implementation()
 	StatusRecipesByTag.Reset();
 	StatusSnapshot.Reset();
 	ActiveStatusEffects.Reset();
-	ContextTags.Reset();
 	StateTags.Reset();
 	LastClockSeconds = 0.0;
-	AttributesSystem.Reset();
 
 	if (DebugSubsystem.IsValid())
 	{
@@ -150,7 +133,6 @@ void UOmniStatusSystem::TickSystem_Implementation(const float DeltaTime)
 		TickStatusEffects(LastClockSeconds);
 	}
 
-	RefreshCombinedStateTags();
 	RebuildStatusSnapshot(LastClockSeconds);
 	PublishTelemetry();
 }
@@ -217,9 +199,9 @@ bool UOmniStatusSystem::HandleCommand_Implementation(const FOmniCommandMessage& 
 
 bool UOmniStatusSystem::HandleQuery_Implementation(FOmniQueryMessage& Query)
 {
-	if (Query.QueryName == OmniMessageSchema::QueryGetStateTagsCsv)
+	if (Query.QueryName == OmniMessageSchema::QueryGetStatusTagsCsv)
 	{
-		RefreshCombinedStateTags();
+		RefreshStatusTags();
 
 		TArray<FString> Tags;
 		for (const FGameplayTag& Tag : StateTags)
@@ -419,7 +401,6 @@ bool UOmniStatusSystem::ApplyStatus(const FGameplayTag StatusTag, FName SourceId
 	SyncStatusDrivenModifiers(StatusTag, SourceId, true);
 	SortActiveStatusEffects();
 	RefreshStatusTags();
-	RefreshCombinedStateTags();
 	RebuildStatusSnapshot(NowSeconds);
 	PublishTelemetry();
 	return true;
@@ -439,7 +420,6 @@ bool UOmniStatusSystem::RemoveStatus(const FGameplayTag StatusTag, const FName S
 	ActiveStatusEffects.RemoveAt(ExistingIndex);
 	SortActiveStatusEffects();
 	RefreshStatusTags();
-	RefreshCombinedStateTags();
 	RebuildStatusSnapshot(ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : LastClockSeconds);
 	PublishTelemetry();
 
@@ -598,40 +578,14 @@ void UOmniStatusSystem::SortActiveStatusEffects()
 
 void UOmniStatusSystem::RefreshStatusTags()
 {
-	ContextTags.Reset();
+	StateTags.Reset();
 	for (const FActiveStatusEffect& Effect : ActiveStatusEffects)
 	{
 		if (Effect.StatusTag.IsValid())
 		{
-			ContextTags.AddTag(Effect.StatusTag);
+			StateTags.AddTag(Effect.StatusTag);
 		}
 	}
-}
-
-void UOmniStatusSystem::RefreshCombinedStateTags()
-{
-	StateTags = ContextTags;
-
-	if (const UOmniAttributesSystem* ResolvedAttributes = ResolveAttributesSystem())
-	{
-		StateTags.AppendTags(ResolvedAttributes->GetStateTags());
-	}
-}
-
-UOmniAttributesSystem* UOmniStatusSystem::ResolveAttributesSystem() const
-{
-	if (AttributesSystem.IsValid())
-	{
-		return AttributesSystem.Get();
-	}
-
-	if (!Registry.IsValid())
-	{
-		return nullptr;
-	}
-
-	AttributesSystem = Cast<UOmniAttributesSystem>(Registry->GetSystemById(OmniStatus::AttributesSystemId));
-	return AttributesSystem.Get();
 }
 
 void UOmniStatusSystem::SyncStatusDrivenModifiers(const FGameplayTag StatusTag, const FName SourceId, const bool bActive) const

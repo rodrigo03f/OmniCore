@@ -105,16 +105,18 @@ $isCiRun = (($env:CI -eq "true") -or ($env:GITHUB_ACTIONS -eq "true"))
 
 $protectedMapNames = @("Settings", "Payload", "Arguments", "Output")
 $mapMutationOrLookupOps = @("Add", "Find", "Contains")
-$expectedManifestProfileAssetPaths = @(
+$expectedManifestDataAssetPaths = @(
     "/Game/Data/Status/DA_Omni_StatusProfile_Default.DA_Omni_StatusProfile_Default",
     "/Game/Data/Action/DA_Omni_ActionProfile_Default.DA_Omni_ActionProfile_Default",
-    "/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default"
+    "/Game/Data/Movement/DA_Omni_MovementProfile_Default.DA_Omni_MovementProfile_Default",
+    "/Game/Data/Status/DA_AttributesRecipe_Default.DA_AttributesRecipe_Default"
 )
 $expectedManifestRoot = "/Game/Data"
 $manifestDataRootRegex = "/Game(?:/[A-Za-z0-9_]+)*/Data/"
 $expectedContentAssets = @(
     "Content/Data/Action/DA_Omni_ActionLibrary_Default.uasset",
     "Content/Data/Action/DA_Omni_ActionProfile_Default.uasset",
+    "Content/Data/Status/DA_AttributesRecipe_Default.uasset",
     "Content/Data/Status/DA_Omni_StatusLibrary_Default.uasset",
     "Content/Data/Status/DA_Omni_StatusProfile_Default.uasset",
     "Content/Data/Movement/DA_Omni_MovementLibrary_Default.uasset",
@@ -316,9 +318,9 @@ else {
         Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-root-unexpected" -Text ("Manifest root is '" + $manifestRoots[0] + "'. Expected temporary root: " + $expectedManifestRoot)
     }
 
-    foreach ($expectedPath in $expectedManifestProfileAssetPaths) {
+    foreach ($expectedPath in $expectedManifestDataAssetPaths) {
         if ($manifestContent -notmatch [regex]::Escape($expectedPath)) {
-            Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-profile-path-missing" -Text "Expected profile asset path not found: $expectedPath"
+            Add-Violation -Target ([ref]$violations) -File $ManifestCppRelativePath -Line 0 -Rule "manifest-data-asset-path-missing" -Text "Expected manifest asset path not found: $expectedPath"
         }
     }
 }
@@ -370,6 +372,51 @@ foreach ($runtimeFile in $runtimeSystemFiles) {
                 Add-Violation -Target ([ref]$violations) -File $runtimeRelativePath -Line ($index + 1) -Rule "fallback-call-not-guarded" -Text $line.Trim()
             }
         }
+    }
+}
+
+$schemaCppRelativePath = "Plugins/Omni/Source/OmniCore/Private/Systems/OmniSystemMessageSchemas.cpp"
+$schemaCppPath = Join-Path $projectRoot $schemaCppRelativePath
+if (-not (Test-Path $schemaCppPath)) {
+    Add-Violation -Target ([ref]$violations) -File $schemaCppRelativePath -Line 0 -Rule "schema-file-missing" -Text "OmniSystemMessageSchemas.cpp not found."
+}
+else {
+    $schemaContent = Get-Content -Raw -Path $schemaCppPath
+    if ($schemaContent -notmatch "Message\.TargetSystem\s*=\s*OmniMessageSchema::SystemAttributes\s*;\s*[\r\n]+\s*Message\.QueryName\s*=\s*OmniMessageSchema::QueryGetStateTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $schemaCppRelativePath -Line 0 -Rule "schema-state-tags-target-mismatch" -Text "GetStateTagsCsv must target SystemAttributes."
+    }
+    if ($schemaContent -notmatch "Message\.TargetSystem\s*=\s*OmniMessageSchema::SystemStatus\s*;\s*[\r\n]+\s*Message\.QueryName\s*=\s*OmniMessageSchema::QueryGetStatusTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $schemaCppRelativePath -Line 0 -Rule "schema-status-tags-target-mismatch" -Text "GetStatusTagsCsv must target SystemStatus."
+    }
+}
+
+$attributesSystemRelativePath = "Plugins/Omni/Source/OmniRuntime/Private/Systems/Attributes/OmniAttributesSystem.cpp"
+$attributesSystemPath = Join-Path $projectRoot $attributesSystemRelativePath
+if (-not (Test-Path $attributesSystemPath)) {
+    Add-Violation -Target ([ref]$violations) -File $attributesSystemRelativePath -Line 0 -Rule "attributes-system-file-missing" -Text "OmniAttributesSystem.cpp not found."
+}
+else {
+    $attributesContent = Get-Content -Raw -Path $attributesSystemPath
+    if ($attributesContent -notmatch "Query\.QueryName\s*==\s*OmniMessageSchema::QueryGetStateTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $attributesSystemRelativePath -Line 0 -Rule "attributes-state-tags-query-missing" -Text "Attributes must answer QueryGetStateTagsCsv."
+    }
+    if ($attributesContent -match "Query\.QueryName\s*==\s*OmniMessageSchema::QueryGetStatusTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $attributesSystemRelativePath -Line 0 -Rule "attributes-status-tags-query-forbidden" -Text "Attributes must not answer QueryGetStatusTagsCsv."
+    }
+}
+
+$statusSystemRelativePath = "Plugins/Omni/Source/OmniRuntime/Private/Systems/Status/OmniStatusSystem.cpp"
+$statusSystemPath = Join-Path $projectRoot $statusSystemRelativePath
+if (-not (Test-Path $statusSystemPath)) {
+    Add-Violation -Target ([ref]$violations) -File $statusSystemRelativePath -Line 0 -Rule "status-system-file-missing" -Text "OmniStatusSystem.cpp not found."
+}
+else {
+    $statusContent = Get-Content -Raw -Path $statusSystemPath
+    if ($statusContent -notmatch "Query\.QueryName\s*==\s*OmniMessageSchema::QueryGetStatusTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $statusSystemRelativePath -Line 0 -Rule "status-tags-query-missing" -Text "Status must answer QueryGetStatusTagsCsv."
+    }
+    if ($statusContent -match "Query\.QueryName\s*==\s*OmniMessageSchema::QueryGetStateTagsCsv") {
+        Add-Violation -Target ([ref]$violations) -File $statusSystemRelativePath -Line 0 -Rule "status-state-tags-query-forbidden" -Text "Status must not answer QueryGetStateTagsCsv."
     }
 }
 

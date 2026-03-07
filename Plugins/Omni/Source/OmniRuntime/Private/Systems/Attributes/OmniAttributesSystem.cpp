@@ -17,7 +17,6 @@ namespace OmniAttributes
 	static const FName CategoryName(TEXT("Attributes"));
 	static const FName SourceName(TEXT("AttributesSystem"));
 	static const FName SystemId(TEXT("Attributes"));
-	static const FName LegacyEventSourceSystemId(TEXT("Status"));
 	static const FName CommandSetSprinting(TEXT("SetSprinting"));
 	static const FName CommandConsumeStamina(TEXT("ConsumeStamina"));
 	static const FName CommandAddStamina(TEXT("AddStamina"));
@@ -26,9 +25,6 @@ namespace OmniAttributes
 	static const FName QueryGetStamina(TEXT("GetStamina"));
 	static const FName ConfigSectionAttributes(TEXT("Omni.Attributes"));
 	static const FName ConfigKeyRecipe(TEXT("Recipe"));
-	static const FName ConfigSectionLegacyAttributes(TEXT("/Script/OmniRuntime.OmniAttributesSystem"));
-	static const FName ConfigSectionLegacyStatus(TEXT("/Script/OmniRuntime.OmniStatusSystem"));
-	static const FName ConfigKeyRecipeFlat(TEXT("Omni.Attributes.Recipe"));
 	static const TCHAR* DefaultRecipeAssetPath = TEXT("/Game/Data/Status/DA_AttributesRecipe_Default.DA_AttributesRecipe_Default");
 	static const FName DebugMetricProfileAttributes(TEXT("Omni.Profile.Attributes"));
 	static const FName HpTagName(TEXT("Game.Attr.HP"));
@@ -451,30 +447,12 @@ bool UOmniAttributesSystem::TryLoadRecipeFromConfig(FString& OutError)
 	OutError.Reset();
 
 	FString RecipePath;
-	bool bFoundRecipePath = GConfig->GetString(
+	const bool bFoundRecipePath = GConfig->GetString(
 		*OmniAttributes::ConfigSectionAttributes.ToString(),
 		*OmniAttributes::ConfigKeyRecipe.ToString(),
 		RecipePath,
 		GGameIni
 	);
-	if (!bFoundRecipePath)
-	{
-		bFoundRecipePath = GConfig->GetString(
-			*OmniAttributes::ConfigSectionLegacyAttributes.ToString(),
-			*OmniAttributes::ConfigKeyRecipeFlat.ToString(),
-			RecipePath,
-			GGameIni
-		);
-	}
-	if (!bFoundRecipePath)
-	{
-		bFoundRecipePath = GConfig->GetString(
-			*OmniAttributes::ConfigSectionLegacyStatus.ToString(),
-			*OmniAttributes::ConfigKeyRecipeFlat.ToString(),
-			RecipePath,
-			GGameIni
-		);
-	}
 	if (!bFoundRecipePath || RecipePath.IsEmpty())
 	{
 		RecipePath = OmniAttributes::DefaultRecipeAssetPath;
@@ -704,13 +682,6 @@ void UOmniAttributesSystem::SetExhausted(const bool bInExhausted)
 		FOmniExhaustedEventSchema EventSchema;
 		EventSchema.SourceSystem = OmniAttributes::SystemId;
 		Registry->BroadcastEvent(FOmniExhaustedEventSchema::ToMessage(EventSchema));
-		// Compat legado temporario.
-		if (OmniAttributes::LegacyEventSourceSystemId != OmniAttributes::SystemId)
-		{
-			FOmniExhaustedEventSchema LegacyEventSchema = EventSchema;
-			LegacyEventSchema.SourceSystem = OmniAttributes::LegacyEventSourceSystemId;
-			Registry->BroadcastEvent(FOmniExhaustedEventSchema::ToMessage(LegacyEventSchema));
-		}
 		UE_LOG(LogOmniAttributesSystem, Log, TEXT("[Omni][Attributes] Game.State.Exhausted = True"));
 		if (DebugSubsystem.IsValid())
 		{
@@ -722,13 +693,6 @@ void UOmniAttributesSystem::SetExhausted(const bool bInExhausted)
 		FOmniExhaustedClearedEventSchema EventSchema;
 		EventSchema.SourceSystem = OmniAttributes::SystemId;
 		Registry->BroadcastEvent(FOmniExhaustedClearedEventSchema::ToMessage(EventSchema));
-		// Compat legado temporario.
-		if (OmniAttributes::LegacyEventSourceSystemId != OmniAttributes::SystemId)
-		{
-			FOmniExhaustedClearedEventSchema LegacyEventSchema = EventSchema;
-			LegacyEventSchema.SourceSystem = OmniAttributes::LegacyEventSourceSystemId;
-			Registry->BroadcastEvent(FOmniExhaustedClearedEventSchema::ToMessage(LegacyEventSchema));
-		}
 		UE_LOG(LogOmniAttributesSystem, Log, TEXT("[Omni][Attributes] Game.State.Exhausted = False"));
 		if (DebugSubsystem.IsValid())
 		{

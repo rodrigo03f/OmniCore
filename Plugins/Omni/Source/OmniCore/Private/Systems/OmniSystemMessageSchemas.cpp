@@ -13,22 +13,13 @@ namespace OmniMessageSchema
 	const FName QueryCanStartAction(TEXT("CanStartAction"));
 	const FName QueryIsExhausted(TEXT("IsExhausted"));
 	const FName QueryGetStateTagsCsv(TEXT("GetStateTagsCsv"));
+	const FName QueryGetStatusTagsCsv(TEXT("GetStatusTagsCsv"));
 	const FName EventExhausted(TEXT("Exhausted"));
 	const FName EventExhaustedCleared(TEXT("ExhaustedCleared"));
 }
 
 namespace
 {
-	static bool IsAttributesOrStatusTarget(const FName TargetSystem)
-	{
-		return TargetSystem == OmniMessageSchema::SystemAttributes || TargetSystem == OmniMessageSchema::SystemStatus;
-	}
-
-	static bool IsAttributesOrStatusSource(const FName SourceSystem)
-	{
-		return SourceSystem == OmniMessageSchema::SystemAttributes || SourceSystem == OmniMessageSchema::SystemStatus;
-	}
-
 	static bool TryGetRequiredValue(const TMap<FName, FString>& Map, const FName Key, FString& OutValue, FString& OutError)
 	{
 		const FString* FoundValue = Map.Find(Key);
@@ -200,7 +191,7 @@ bool FOmniSetSprintingCommandSchema::TryFromMessage(
 
 bool FOmniSetSprintingCommandSchema::Validate(const FOmniCommandMessage& Message, FString& OutError)
 {
-	if (!IsAttributesOrStatusTarget(Message.TargetSystem) || Message.CommandName != OmniMessageSchema::CommandSetSprinting)
+	if (Message.TargetSystem != OmniMessageSchema::SystemAttributes || Message.CommandName != OmniMessageSchema::CommandSetSprinting)
 	{
 		OutError = TEXT("Command schema mismatch for SetSprinting.");
 		return false;
@@ -337,7 +328,7 @@ bool FOmniIsExhaustedQuerySchema::TryFromMessage(
 
 bool FOmniIsExhaustedQuerySchema::Validate(const FOmniQueryMessage& Message, FString& OutError)
 {
-	if (!IsAttributesOrStatusTarget(Message.TargetSystem) || Message.QueryName != OmniMessageSchema::QueryIsExhausted)
+	if (Message.TargetSystem != OmniMessageSchema::SystemAttributes || Message.QueryName != OmniMessageSchema::QueryIsExhausted)
 	{
 		OutError = TEXT("Query schema mismatch for IsExhausted.");
 		return false;
@@ -350,7 +341,7 @@ FOmniQueryMessage FOmniGetStateTagsCsvQuerySchema::ToMessage(const FOmniGetState
 {
 	FOmniQueryMessage Message;
 	Message.SourceSystem = Data.SourceSystem;
-	Message.TargetSystem = OmniMessageSchema::SystemStatus;
+	Message.TargetSystem = OmniMessageSchema::SystemAttributes;
 	Message.QueryName = OmniMessageSchema::QueryGetStateTagsCsv;
 	return Message;
 }
@@ -373,9 +364,45 @@ bool FOmniGetStateTagsCsvQuerySchema::TryFromMessage(
 
 bool FOmniGetStateTagsCsvQuerySchema::Validate(const FOmniQueryMessage& Message, FString& OutError)
 {
-	if (Message.TargetSystem != OmniMessageSchema::SystemStatus || Message.QueryName != OmniMessageSchema::QueryGetStateTagsCsv)
+	if (Message.TargetSystem != OmniMessageSchema::SystemAttributes || Message.QueryName != OmniMessageSchema::QueryGetStateTagsCsv)
 	{
 		OutError = TEXT("Query schema mismatch for GetStateTagsCsv.");
+		return false;
+	}
+
+	return true;
+}
+
+FOmniQueryMessage FOmniGetStatusTagsCsvQuerySchema::ToMessage(const FOmniGetStatusTagsCsvQuerySchema& Data)
+{
+	FOmniQueryMessage Message;
+	Message.SourceSystem = Data.SourceSystem;
+	Message.TargetSystem = OmniMessageSchema::SystemStatus;
+	Message.QueryName = OmniMessageSchema::QueryGetStatusTagsCsv;
+	return Message;
+}
+
+bool FOmniGetStatusTagsCsvQuerySchema::TryFromMessage(
+	const FOmniQueryMessage& Message,
+	FOmniGetStatusTagsCsvQuerySchema& OutData,
+	FString& OutError
+)
+{
+	if (!Validate(Message, OutError))
+	{
+		return false;
+	}
+
+	OutData.SourceSystem = Message.SourceSystem;
+	OutData.TagsCsv = Message.Result;
+	return true;
+}
+
+bool FOmniGetStatusTagsCsvQuerySchema::Validate(const FOmniQueryMessage& Message, FString& OutError)
+{
+	if (Message.TargetSystem != OmniMessageSchema::SystemStatus || Message.QueryName != OmniMessageSchema::QueryGetStatusTagsCsv)
+	{
+		OutError = TEXT("Query schema mismatch for GetStatusTagsCsv.");
 		return false;
 	}
 
@@ -409,7 +436,7 @@ bool FOmniExhaustedEventSchema::TryFromMessage(
 
 bool FOmniExhaustedEventSchema::Validate(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (!IsAttributesOrStatusSource(Message.SourceSystem) || Message.EventName != OmniMessageSchema::EventExhausted)
+	if (Message.SourceSystem != OmniMessageSchema::SystemAttributes || Message.EventName != OmniMessageSchema::EventExhausted)
 	{
 		OutError = TEXT("Event schema mismatch for Exhausted.");
 		return false;
@@ -459,7 +486,7 @@ bool FOmniExhaustedClearedEventSchema::TryFromMessage(
 
 bool FOmniExhaustedClearedEventSchema::Validate(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (!IsAttributesOrStatusSource(Message.SourceSystem) || Message.EventName != OmniMessageSchema::EventExhaustedCleared)
+	if (Message.SourceSystem != OmniMessageSchema::SystemAttributes || Message.EventName != OmniMessageSchema::EventExhaustedCleared)
 	{
 		OutError = TEXT("Event schema mismatch for ExhaustedCleared.");
 		return false;
@@ -492,7 +519,7 @@ bool FOmniMessageSchemaValidator::ValidateCommand(const FOmniCommandMessage& Mes
 	{
 		return FOmniStopActionCommandSchema::Validate(Message, OutError);
 	}
-	if (IsAttributesOrStatusTarget(Message.TargetSystem) && Message.CommandName == OmniMessageSchema::CommandSetSprinting)
+	if (Message.TargetSystem == OmniMessageSchema::SystemAttributes && Message.CommandName == OmniMessageSchema::CommandSetSprinting)
 	{
 		return FOmniSetSprintingCommandSchema::Validate(Message, OutError);
 	}
@@ -502,11 +529,11 @@ bool FOmniMessageSchemaValidator::ValidateCommand(const FOmniCommandMessage& Mes
 
 bool FOmniMessageSchemaValidator::ValidateEvent(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (IsAttributesOrStatusSource(Message.SourceSystem) && Message.EventName == OmniMessageSchema::EventExhausted)
+	if (Message.SourceSystem == OmniMessageSchema::SystemAttributes && Message.EventName == OmniMessageSchema::EventExhausted)
 	{
 		return FOmniExhaustedEventSchema::Validate(Message, OutError);
 	}
-	if (IsAttributesOrStatusSource(Message.SourceSystem) && Message.EventName == OmniMessageSchema::EventExhaustedCleared)
+	if (Message.SourceSystem == OmniMessageSchema::SystemAttributes && Message.EventName == OmniMessageSchema::EventExhaustedCleared)
 	{
 		return FOmniExhaustedClearedEventSchema::Validate(Message, OutError);
 	}
@@ -520,13 +547,17 @@ bool FOmniMessageSchemaValidator::ValidateQuery(const FOmniQueryMessage& Message
 	{
 		return FOmniCanStartActionQuerySchema::Validate(Message, OutError);
 	}
-	if (IsAttributesOrStatusTarget(Message.TargetSystem) && Message.QueryName == OmniMessageSchema::QueryIsExhausted)
+	if (Message.TargetSystem == OmniMessageSchema::SystemAttributes && Message.QueryName == OmniMessageSchema::QueryIsExhausted)
 	{
 		return FOmniIsExhaustedQuerySchema::Validate(Message, OutError);
 	}
-	if (Message.TargetSystem == OmniMessageSchema::SystemStatus && Message.QueryName == OmniMessageSchema::QueryGetStateTagsCsv)
+	if (Message.TargetSystem == OmniMessageSchema::SystemAttributes && Message.QueryName == OmniMessageSchema::QueryGetStateTagsCsv)
 	{
 		return FOmniGetStateTagsCsvQuerySchema::Validate(Message, OutError);
+	}
+	if (Message.TargetSystem == OmniMessageSchema::SystemStatus && Message.QueryName == OmniMessageSchema::QueryGetStatusTagsCsv)
+	{
+		return FOmniGetStatusTagsCsvQuerySchema::Validate(Message, OutError);
 	}
 
 	return true;

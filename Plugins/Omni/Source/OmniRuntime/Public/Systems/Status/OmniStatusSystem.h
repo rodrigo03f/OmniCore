@@ -10,7 +10,6 @@ class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
 class UOmniClockSubsystem;
-class UOmniAttributesSystem;
 
 // Purpose:
 // - Orquestrar status temporarios (duracao, stacks, tick e tags de status).
@@ -20,7 +19,7 @@ class UOmniAttributesSystem;
 // - Tempo de simulacao via OmniClock para expiracao deterministica.
 // Outputs:
 // - Snapshot de status ativos.
-// - Gameplay tags agregadas (status + attributes) para compatibilidade temporaria.
+// - Gameplay tags de status.
 // - Telemetria de debug do slice de status.
 // Determinism:
 // - Duracao/expiracao de status depende apenas de recipe + OmniClock.
@@ -74,16 +73,11 @@ private:
 	int32 FindActiveStatusIndex(FGameplayTag StatusTag, FName SourceId) const;
 	void SortActiveStatusEffects();
 	void RefreshStatusTags();
-	void RefreshCombinedStateTags();
-	UOmniAttributesSystem* ResolveAttributesSystem() const;
 	void SyncStatusDrivenModifiers(FGameplayTag StatusTag, FName SourceId, bool bActive) const;
 	FName BuildStatusModifierSourceId(FGameplayTag StatusTag, FName SourceId) const;
 	void PublishTelemetry();
 
 private:
-	UPROPERTY(Transient)
-	FGameplayTagContainer ContextTags;
-
 	UPROPERTY(Transient)
 	FGameplayTagContainer StateTags;
 
@@ -106,7 +100,4 @@ private:
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniClockSubsystem> ClockSubsystem;
-
-	UPROPERTY(Transient)
-	mutable TWeakObjectPtr<UOmniAttributesSystem> AttributesSystem;
 };

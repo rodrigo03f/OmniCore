@@ -20,7 +20,7 @@ class USpringArmComponent;
 // - Aplicar rig no backend Unreal (PCM/CameraComponent/SpringArm).
 // - Expor snapshot deterministico para UI/debug.
 // Inputs:
-// - Tags de contexto do player (Status + GameplayTagAssetInterface no Pawn).
+// - Tags de contexto agregadas de Attributes + Status + GameplayTagAssetInterface no Pawn.
 // - Config de rigs em DefaultGame.ini.
 // Outputs:
 // - Camera aplicada no backend Unreal.
@@ -61,7 +61,7 @@ private:
 		FString& OutError
 	) const;
 	bool ResolveContextTags(FGameplayTagContainer& OutContextTags) const;
-	bool QueryStatusContextTags(FGameplayTagContainer& InOutContextTags) const;
+	bool QuerySystemContextTags(FGameplayTagContainer& InOutContextTags) const;
 	FGameplayTag ResolveModeTag(EOmniCameraMode Mode) const;
 	bool TryGetPrimaryPlayerController(APlayerController*& OutPlayerController) const;
 	APlayerCameraManager* ResolveCameraManager(APlayerController* PlayerController) const;

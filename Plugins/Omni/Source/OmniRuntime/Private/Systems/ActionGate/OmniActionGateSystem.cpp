@@ -956,7 +956,31 @@ FGameplayTagContainer UOmniActionGateSystem::BuildCurrentBlockingContext() const
 {
 	FGameplayTagContainer Context;
 
-	if (Registry.IsValid())
+	if (!Registry.IsValid())
+	{
+		return Context;
+	}
+
+	const auto AppendCsvTagsToContext = [&Context](const FString& TagsCsv)
+	{
+		if (TagsCsv.IsEmpty())
+		{
+			return;
+		}
+
+		TArray<FString> TagStrings;
+		TagsCsv.ParseIntoArray(TagStrings, TEXT(","), true);
+		for (FString TagString : TagStrings)
+		{
+			TagString.TrimStartAndEndInline();
+			const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagString), false);
+			if (Tag.IsValid())
+			{
+				Context.AddTag(Tag);
+			}
+		}
+	};
+
 	{
 		FOmniGetStateTagsCsvQuerySchema RequestSchema;
 		RequestSchema.SourceSystem = OmniActionGate::SystemId;
@@ -966,22 +990,27 @@ FGameplayTagContainer UOmniActionGateSystem::BuildCurrentBlockingContext() const
 		FString ParseError;
 		if (Registry->ExecuteQuery(Query)
 			&& Query.bSuccess
-			&& FOmniGetStateTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError)
-			&& !ResponseSchema.TagsCsv.IsEmpty())
+			&& FOmniGetStateTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
 		{
-			TArray<FString> TagStrings;
-			ResponseSchema.TagsCsv.ParseIntoArray(TagStrings, TEXT(","), true);
-			for (FString TagString : TagStrings)
-			{
-				TagString.TrimStartAndEndInline();
-				const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagString), false);
-				if (Tag.IsValid())
-				{
-					Context.AddTag(Tag);
-				}
-			}
+			AppendCsvTagsToContext(ResponseSchema.TagsCsv);
 		}
 	}
+
+	{
+		FOmniGetStatusTagsCsvQuerySchema RequestSchema;
+		RequestSchema.SourceSystem = OmniActionGate::SystemId;
+		FOmniQueryMessage Query = FOmniGetStatusTagsCsvQuerySchema::ToMessage(RequestSchema);
+
+		FOmniGetStatusTagsCsvQuerySchema ResponseSchema;
+		FString ParseError;
+		if (Registry->ExecuteQuery(Query)
+			&& Query.bSuccess
+			&& FOmniGetStatusTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
+		{
+			AppendCsvTagsToContext(ResponseSchema.TagsCsv);
+		}
+	}
+
 	return Context;
 }
 

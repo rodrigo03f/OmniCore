@@ -369,7 +369,7 @@ bool UOmniCameraSystem::TryLoadRigAssetFromPath(
 bool UOmniCameraSystem::ResolveContextTags(FGameplayTagContainer& OutContextTags) const
 {
 	OutContextTags.Reset();
-	QueryStatusContextTags(OutContextTags);
+	QuerySystemContextTags(OutContextTags);
 
 	APlayerController* PlayerController = nullptr;
 	if (!TryGetPrimaryPlayerController(PlayerController) || !PlayerController)
@@ -394,47 +394,68 @@ bool UOmniCameraSystem::ResolveContextTags(FGameplayTagContainer& OutContextTags
 	return OutContextTags.Num() > 0;
 }
 
-bool UOmniCameraSystem::QueryStatusContextTags(FGameplayTagContainer& InOutContextTags) const
+bool UOmniCameraSystem::QuerySystemContextTags(FGameplayTagContainer& InOutContextTags) const
 {
 	if (!Registry.IsValid())
 	{
 		return false;
 	}
 
-	FOmniGetStateTagsCsvQuerySchema RequestSchema;
-	RequestSchema.SourceSystem = OmniCamera::SystemId;
-	FOmniQueryMessage Query = FOmniGetStateTagsCsvQuerySchema::ToMessage(RequestSchema);
+	bool bAnyQuerySucceeded = false;
 
-	if (!Registry->ExecuteQuery(Query) || !Query.bSuccess)
+	const auto AppendCsvTagsToContext = [&InOutContextTags](const FString& TagsCsv)
 	{
-		return false;
-	}
-
-	FOmniGetStateTagsCsvQuerySchema ResponseSchema;
-	FString ParseError;
-	if (!FOmniGetStateTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
-	{
-		return false;
-	}
-
-	if (ResponseSchema.TagsCsv.IsEmpty())
-	{
-		return true;
-	}
-
-	TArray<FString> TagStrings;
-	ResponseSchema.TagsCsv.ParseIntoArray(TagStrings, TEXT(","), true);
-	for (FString TagString : TagStrings)
-	{
-		TagString.TrimStartAndEndInline();
-		const FGameplayTag ParsedTag = FGameplayTag::RequestGameplayTag(FName(*TagString), false);
-		if (ParsedTag.IsValid())
+		if (TagsCsv.IsEmpty())
 		{
-			InOutContextTags.AddTag(ParsedTag);
+			return;
+		}
+
+		TArray<FString> TagStrings;
+		TagsCsv.ParseIntoArray(TagStrings, TEXT(","), true);
+		for (FString TagString : TagStrings)
+		{
+			TagString.TrimStartAndEndInline();
+			const FGameplayTag ParsedTag = FGameplayTag::RequestGameplayTag(FName(*TagString), false);
+			if (ParsedTag.IsValid())
+			{
+				InOutContextTags.AddTag(ParsedTag);
+			}
+		}
+	};
+
+	{
+		FOmniGetStateTagsCsvQuerySchema RequestSchema;
+		RequestSchema.SourceSystem = OmniCamera::SystemId;
+		FOmniQueryMessage Query = FOmniGetStateTagsCsvQuerySchema::ToMessage(RequestSchema);
+		if (Registry->ExecuteQuery(Query) && Query.bSuccess)
+		{
+			FOmniGetStateTagsCsvQuerySchema ResponseSchema;
+			FString ParseError;
+			if (FOmniGetStateTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
+			{
+				bAnyQuerySucceeded = true;
+				AppendCsvTagsToContext(ResponseSchema.TagsCsv);
+			}
 		}
 	}
 
-	return true;
+	{
+		FOmniGetStatusTagsCsvQuerySchema RequestSchema;
+		RequestSchema.SourceSystem = OmniCamera::SystemId;
+		FOmniQueryMessage Query = FOmniGetStatusTagsCsvQuerySchema::ToMessage(RequestSchema);
+		if (Registry->ExecuteQuery(Query) && Query.bSuccess)
+		{
+			FOmniGetStatusTagsCsvQuerySchema ResponseSchema;
+			FString ParseError;
+			if (FOmniGetStatusTagsCsvQuerySchema::TryFromMessage(Query, ResponseSchema, ParseError))
+			{
+				bAnyQuerySucceeded = true;
+				AppendCsvTagsToContext(ResponseSchema.TagsCsv);
+			}
+		}
+	}
+
+	return bAnyQuerySucceeded;
 }
 
 FGameplayTag UOmniCameraSystem::ResolveModeTag(const EOmniCameraMode Mode) const

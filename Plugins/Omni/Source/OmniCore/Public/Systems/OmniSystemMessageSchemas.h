@@ -17,6 +17,7 @@ namespace OmniMessageSchema
 	OMNICORE_API extern const FName QueryCanStartAction;
 	OMNICORE_API extern const FName QueryIsExhausted;
 	OMNICORE_API extern const FName QueryGetStateTagsCsv;
+	OMNICORE_API extern const FName QueryGetStatusTagsCsv;
 	OMNICORE_API extern const FName EventExhausted;
 	OMNICORE_API extern const FName EventExhaustedCleared;
 }
@@ -82,6 +83,16 @@ struct OMNICORE_API FOmniGetStateTagsCsvQuerySchema
 
 	static FOmniQueryMessage ToMessage(const FOmniGetStateTagsCsvQuerySchema& Data);
 	static bool TryFromMessage(const FOmniQueryMessage& Message, FOmniGetStateTagsCsvQuerySchema& OutData, FString& OutError);
+	static bool Validate(const FOmniQueryMessage& Message, FString& OutError);
+};
+
+struct OMNICORE_API FOmniGetStatusTagsCsvQuerySchema
+{
+	FName SourceSystem = NAME_None;
+	FString TagsCsv;
+
+	static FOmniQueryMessage ToMessage(const FOmniGetStatusTagsCsvQuerySchema& Data);
+	static bool TryFromMessage(const FOmniQueryMessage& Message, FOmniGetStatusTagsCsvQuerySchema& OutData, FString& OutError);
 	static bool Validate(const FOmniQueryMessage& Message, FString& OutError);
 };
 
