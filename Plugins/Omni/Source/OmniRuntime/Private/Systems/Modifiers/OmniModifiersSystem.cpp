@@ -10,6 +10,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogOmniModifiersSystem, Log, All);
 namespace OmniModifiers
 {
 	static const FName SystemId(TEXT("Modifiers"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 	static const FName CommandAddModifier(TEXT("AddModifier"));
 	static const FName CommandRemoveModifier(TEXT("RemoveModifier"));
 	static const FName QueryEvaluateModifier(TEXT("EvaluateModifier"));
@@ -25,7 +26,7 @@ FName UOmniModifiersSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniModifiersSystem::GetDependencies_Implementation() const
 {
-	return {};
+	return { OmniModifiers::AttributesSystemId };
 }
 
 void UOmniModifiersSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)

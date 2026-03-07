@@ -20,6 +20,7 @@ namespace OmniActionGate
 	static const FName SystemId(TEXT("ActionGate"));
 	static const FName QueryIsActionActive(TEXT("IsActionActive"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 	static const FName EventOnActionStarted(TEXT("OnActionStarted"));
 	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
 	static const FName EventOnActionDenied(TEXT("OnActionDenied"));
@@ -69,7 +70,7 @@ FName UOmniActionGateSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniActionGateSystem::GetDependencies_Implementation() const
 {
-	return { OmniActionGate::StatusSystemId };
+	return { OmniActionGate::StatusSystemId, OmniActionGate::AttributesSystemId };
 }
 
 void UOmniActionGateSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)

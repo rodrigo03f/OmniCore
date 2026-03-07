@@ -3,9 +3,9 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Systems/Attributes/OmniAttributesSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
-#include "Systems/Status/OmniStatusSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniMotionMatchingSubsystem, Log, All);
 
@@ -13,7 +13,7 @@ namespace OmniMotionMatching
 {
 	static const FName DefaultAnimSetTagName(TEXT("Game.Anim.Set.MM.Debug"));
 	static const FName MovementSystemId(TEXT("Movement"));
-	static const FName StatusSystemId(TEXT("Status"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 }
 
 void UOmniMotionMatchingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -95,12 +95,12 @@ void UOmniMotionMatchingSubsystem::GatherRuntimeInputs(float& OutSpeed, bool& Ou
 		OutIsSprinting = MovementSystem->IsSprinting();
 	}
 
-	const UOmniStatusSystem* StatusSystem = Cast<UOmniStatusSystem>(
-		Registry->GetSystemById(OmniMotionMatching::StatusSystemId)
+	const UOmniAttributesSystem* AttributesSystem = Cast<UOmniAttributesSystem>(
+		Registry->GetSystemById(OmniMotionMatching::AttributesSystemId)
 	);
-	if (StatusSystem)
+	if (AttributesSystem)
 	{
-		OutIsExhausted = StatusSystem->IsExhausted();
+		OutIsExhausted = AttributesSystem->IsExhausted();
 	}
 }
 

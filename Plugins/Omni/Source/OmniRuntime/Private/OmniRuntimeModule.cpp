@@ -16,6 +16,7 @@
 #include "Modules/ModuleManager.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Systems/Camera/OmniCameraSystem.h"
+#include "Systems/Attributes/OmniAttributesSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
 #include "Systems/Modifiers/OmniModifiersSystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
@@ -234,6 +235,41 @@ namespace OmniRuntimeConsole
 			}
 
 			Function(StatusSystem);
+			++Count;
+		}
+
+		return Count;
+	}
+
+	static int32 ForEachAttributesSystem(const TFunctionRef<void(UOmniAttributesSystem*)>& Function)
+	{
+		if (!GEngine)
+		{
+			return 0;
+		}
+
+		int32 Count = 0;
+		for (const FWorldContext& WorldContext : GEngine->GetWorldContexts())
+		{
+			UGameInstance* GameInstance = WorldContext.OwningGameInstance;
+			if (!GameInstance)
+			{
+				continue;
+			}
+
+			UOmniSystemRegistrySubsystem* Registry = GameInstance->GetSubsystem<UOmniSystemRegistrySubsystem>();
+			if (!Registry || !Registry->IsRegistryInitialized())
+			{
+				continue;
+			}
+
+			UOmniAttributesSystem* AttributesSystem = Cast<UOmniAttributesSystem>(Registry->GetSystemById(TEXT("Attributes")));
+			if (!AttributesSystem)
+			{
+				continue;
+			}
+
+			Function(AttributesSystem);
 			++Count;
 		}
 
@@ -566,11 +602,11 @@ namespace OmniRuntimeConsole
 		}
 
 		int32 StatusCount = 0;
-		ForEachStatusSystem(
-			[&StatusCount](UOmniStatusSystem* StatusSystem)
+		ForEachAttributesSystem(
+			[&StatusCount](UOmniAttributesSystem* AttributesSystem)
 			{
 				++StatusCount;
-				const FOmniAttributeSnapshot Snapshot = StatusSystem->GetSnapshot();
+				const FOmniAttributeSnapshot Snapshot = AttributesSystem->GetSnapshot();
 				UE_LOG(
 					LogOmniRuntime,
 					Log,
@@ -590,7 +626,7 @@ namespace OmniRuntimeConsole
 			UE_LOG(
 				LogOmniRuntime,
 				Warning,
-				TEXT("[Omni][Runtime][Console] Nenhum StatusSystem encontrado | Verifique Registry inicializado e Manifest configurado")
+				TEXT("[Omni][Runtime][Console] Nenhum AttributesSystem encontrado | Verifique Registry inicializado e Manifest configurado")
 			);
 		}
 	}
@@ -654,10 +690,10 @@ namespace OmniRuntimeConsole
 		}
 		Amount = FMath::Max(0.0f, Amount);
 
-		const int32 AffectedSystems = ForEachStatusSystem(
-			[Amount](UOmniStatusSystem* StatusSystem)
+		const int32 AffectedSystems = ForEachAttributesSystem(
+			[Amount](UOmniAttributesSystem* AttributesSystem)
 			{
-				StatusSystem->ApplyDamage(Amount);
+				AttributesSystem->ApplyDamage(Amount);
 			}
 		);
 		UE_LOG(
@@ -680,10 +716,10 @@ namespace OmniRuntimeConsole
 		}
 		Amount = FMath::Max(0.0f, Amount);
 
-		const int32 AffectedSystems = ForEachStatusSystem(
-			[Amount](UOmniStatusSystem* StatusSystem)
+		const int32 AffectedSystems = ForEachAttributesSystem(
+			[Amount](UOmniAttributesSystem* AttributesSystem)
 			{
-				StatusSystem->ApplyHeal(Amount);
+				AttributesSystem->ApplyHeal(Amount);
 			}
 		);
 		UE_LOG(

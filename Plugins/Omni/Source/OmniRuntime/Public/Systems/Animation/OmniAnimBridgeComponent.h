@@ -10,7 +10,7 @@ class UCharacterMovementComponent;
 class UOmniAnimInstanceBase;
 struct FOmniAnimBridgeFrame;
 class UOmniMovementSystem;
-class UOmniStatusSystem;
+class UOmniAttributesSystem;
 class UOmniSystemRegistrySubsystem;
 class USkeletalMeshComponent;
 
@@ -83,7 +83,7 @@ private:
 	TWeakObjectPtr<UOmniMovementSystem> MovementSystem;
 
 	UPROPERTY(Transient)
-	TWeakObjectPtr<UOmniStatusSystem> StatusSystem;
+	TWeakObjectPtr<UOmniAttributesSystem> AttributesSystem;
 
 	UPROPERTY(Transient)
 	FGameplayTag DefaultAnimSetTag;

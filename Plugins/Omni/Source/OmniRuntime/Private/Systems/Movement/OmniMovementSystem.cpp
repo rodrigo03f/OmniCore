@@ -31,7 +31,7 @@ namespace OmniMovement
 	static const FName SourceName(TEXT("MovementSystem"));
 	static const FName SystemId(TEXT("Movement"));
 	static const FName ActionGateSystemId(TEXT("ActionGate"));
-	static const FName StatusSystemId(TEXT("Status"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 	static const FName ModifiersSystemId(TEXT("Modifiers"));
 	static const FName EventOnActionStarted(TEXT("OnActionStarted"));
 	static const FName EventOnActionEnded(TEXT("OnActionEnded"));
@@ -64,7 +64,7 @@ FName UOmniMovementSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniMovementSystem::GetDependencies_Implementation() const
 {
-	return { OmniMovement::ActionGateSystemId, OmniMovement::StatusSystemId, OmniMovement::ModifiersSystemId };
+	return { OmniMovement::ActionGateSystemId, OmniMovement::AttributesSystemId, OmniMovement::ModifiersSystemId };
 }
 
 void UOmniMovementSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)
@@ -239,9 +239,9 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		}
 	}
 
-	const bool bStatusIsExhausted = (bSprintRequested || bIsSprinting) && QueryStatusIsExhausted();
+	const bool bAttributesIsExhausted = (bSprintRequested || bIsSprinting) && QueryAttributesIsExhausted();
 
-	if (bSprintRequested && !bIsSprinting && !bStatusIsExhausted && SimTime >= NextStartAttemptSimTime)
+	if (bSprintRequested && !bIsSprinting && !bAttributesIsExhausted && SimTime >= NextStartAttemptSimTime)
 	{
 		StartSprinting();
 	}
@@ -251,7 +251,7 @@ void UOmniMovementSystem::TickSystem_Implementation(const float DeltaTime)
 		StopSprinting(TEXT("Released"));
 	}
 
-	if (bIsSprinting && bStatusIsExhausted)
+	if (bIsSprinting && bAttributesIsExhausted)
 	{
 		StopSprinting(TEXT("Exhausted"));
 	}
@@ -296,7 +296,7 @@ void UOmniMovementSystem::HandleEvent_Implementation(const FOmniEventMessage& Ev
 {
 	Super::HandleEvent_Implementation(Event);
 
-	if (Event.SourceSystem == OmniMovement::StatusSystemId && Event.EventName == OmniMessageSchema::EventExhausted)
+	if (Event.SourceSystem == OmniMovement::AttributesSystemId && Event.EventName == OmniMessageSchema::EventExhausted)
 	{
 		if (bIsSprinting)
 		{
@@ -497,7 +497,7 @@ void UOmniMovementSystem::SetMovementMode(const EOmniMovementMode NewMode, const
 	MovementMode = NewMode;
 	bIsSprinting = MovementMode == EOmniMovementMode::Sprint;
 	RefreshModeTags();
-	DispatchStatusSprinting(bIsSprinting);
+	DispatchAttributesSprinting(bIsSprinting);
 	UpdateEffectiveSpeed();
 
 	if (bChanged && DebugSubsystem.IsValid())
@@ -848,7 +848,7 @@ double UOmniMovementSystem::GetNowSeconds() const
 	return ClockSubsystem.IsValid() ? ClockSubsystem->GetSimTime() : 0.0;
 }
 
-bool UOmniMovementSystem::QueryStatusIsExhausted() const
+bool UOmniMovementSystem::QueryAttributesIsExhausted() const
 {
 	if (!Registry.IsValid())
 	{
@@ -915,7 +915,7 @@ float UOmniMovementSystem::QueryMovementSpeedModifierMultiplier() const
 	return FMath::Max(0.0f, ParsedResult);
 }
 
-void UOmniMovementSystem::DispatchStatusSprinting(const bool bSprinting) const
+void UOmniMovementSystem::DispatchAttributesSprinting(const bool bSprinting) const
 {
 	if (!Registry.IsValid())
 	{

@@ -15,12 +15,12 @@ class UCharacterMovementComponent;
 
 // Purpose:
 // - Orquestrar estado de sprint no runtime usando dados de profile.
-// - Integrar com Status e ActionGate por mensagens no registry.
+// - Integrar com Attributes e ActionGate por mensagens no registry.
 // - Expor controle de sprint para gameplay/console.
 // Inputs:
 // - Config de movimento (Manifest -> MovementProfile).
 // - Requisicoes de sprint (API/eventos).
-// - Tempo simulado via OmniClock e respostas de status/action gate.
+// - Tempo simulado via OmniClock e respostas de attributes/action gate.
 // Outputs:
 // - Commands/Queries para systems dependentes.
 // - Estado local de sprint (requested/active/auto sprint).
@@ -30,7 +30,7 @@ class UCharacterMovementComponent;
 // - Nao depende de tempo do mundo no caminho normal.
 // Failure modes:
 // - Sem profile valido ou sem OmniClock => fail-fast na inicializacao.
-// - Sprint negado por regras de status/action gate gera motivo explicito.
+// - Sprint negado por regras de attributes/action gate gera motivo explicito.
 UCLASS()
 class OMNIRUNTIME_API UOmniMovementSystem : public UOmniRuntimeSystem
 {
@@ -77,9 +77,9 @@ private:
 	void PublishTelemetry() const;
 	void UpdateSprintRequestedState();
 	double GetNowSeconds() const;
-	bool QueryStatusIsExhausted() const;
+	bool QueryAttributesIsExhausted() const;
 	float QueryMovementSpeedModifierMultiplier() const;
-	void DispatchStatusSprinting(bool bSprinting) const;
+	void DispatchAttributesSprinting(bool bSprinting) const;
 	FOmniGateDecision QueryCanStartSprint() const;
 	bool DispatchStartSprint() const;
 	bool DispatchStopSprint(FName Reason) const;

@@ -4,7 +4,7 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
-#include "Systems/Status/OmniStatusSystem.h"
+#include "Systems/Attributes/OmniAttributesSystem.h"
 #include "Systems/UI/OmniHudWidget.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -192,7 +192,7 @@ void UOmniUIBridgeSubsystem::ResetState()
 	CachedSnapshot = FOmniAttributeSnapshot();
 	bHasCachedSnapshot = false;
 	ActiveHudWidget = nullptr;
-	bLoggedMissingStatusSystem = false;
+	bLoggedMissingAttributesSystem = false;
 	bLoggedWidgetClassLoadFailure = false;
 	bLoggedWidgetCreationFailure = false;
 	bLoggedFallbackActivated = false;
@@ -288,23 +288,23 @@ bool UOmniUIBridgeSubsystem::RefreshCachedSnapshot()
 		return false;
 	}
 
-	UOmniStatusSystem* StatusSystem = Cast<UOmniStatusSystem>(Registry->GetSystemById(TEXT("Status")));
-	if (!StatusSystem)
+	UOmniAttributesSystem* AttributesSystem = Cast<UOmniAttributesSystem>(Registry->GetSystemById(TEXT("Attributes")));
+	if (!AttributesSystem)
 	{
-		if (!bLoggedMissingStatusSystem)
+		if (!bLoggedMissingAttributesSystem)
 		{
-			bLoggedMissingStatusSystem = true;
+			bLoggedMissingAttributesSystem = true;
 			UE_LOG(
 				LogOmniUIBridgeSubsystem,
 				Warning,
-				TEXT("[Omni][UI][HUD] StatusSystem indisponivel no Registry; HUD aguardando snapshot")
+				TEXT("[Omni][UI][HUD] AttributesSystem indisponivel no Registry; HUD aguardando snapshot")
 			);
 		}
 		return false;
 	}
 
-	bLoggedMissingStatusSystem = false;
-	CachedSnapshot = StatusSystem->GetSnapshot();
+	bLoggedMissingAttributesSystem = false;
+	CachedSnapshot = AttributesSystem->GetSnapshot();
 	bHasCachedSnapshot = true;
 	return true;
 }

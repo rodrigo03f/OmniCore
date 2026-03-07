@@ -73,7 +73,7 @@ private:
 	TObjectPtr<UOmniHudWidget> ActiveHudWidget = nullptr;
 
 	UPROPERTY(Transient)
-	bool bLoggedMissingStatusSystem = false;
+	bool bLoggedMissingAttributesSystem = false;
 
 	UPROPERTY(Transient)
 	bool bLoggedWidgetClassLoadFailure = false;

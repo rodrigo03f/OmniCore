@@ -22,6 +22,7 @@ namespace OmniCamera
 	static const FName SourceName(TEXT("CameraSystem"));
 	static const FName SystemId(TEXT("Camera"));
 	static const FName StatusSystemId(TEXT("Status"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 	static const FName ConfigSectionCamera(TEXT("Omni.Camera"));
 	static const FName ConfigKeyDefaultRig(TEXT("DefaultRig"));
 	static const FName ConfigKeyRigFps(TEXT("Rig.FPS"));
@@ -101,7 +102,7 @@ FName UOmniCameraSystem::GetSystemId_Implementation() const
 
 TArray<FName> UOmniCameraSystem::GetDependencies_Implementation() const
 {
-	return { OmniCamera::StatusSystemId };
+	return { OmniCamera::StatusSystemId, OmniCamera::AttributesSystemId };
 }
 
 void UOmniCameraSystem::InitializeSystem_Implementation(UObject* WorldContextObject, const UOmniManifest* Manifest)

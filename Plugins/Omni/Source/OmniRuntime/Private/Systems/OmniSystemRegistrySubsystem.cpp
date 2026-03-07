@@ -34,6 +34,7 @@ void UOmniSystemRegistrySubsystem::Initialize(FSubsystemCollectionBase& Collecti
 	if (UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem())
 	{
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Action"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Attributes"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Status"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Movement"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Camera"), TEXT("Pending"));
@@ -97,6 +98,7 @@ bool UOmniSystemRegistrySubsystem::InitializeFromManifest(UOmniManifest* Manifes
 	if (UOmniDebugSubsystem* DebugSubsystem = TryGetDebugSubsystem())
 	{
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Action"), TEXT("Pending"));
+		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Attributes"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Status"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Movement"), TEXT("Pending"));
 		DebugSubsystem->SetMetric(TEXT("Omni.Profile.Camera"), TEXT("Pending"));

@@ -4,6 +4,7 @@ namespace OmniMessageSchema
 {
 	const FName SystemMovement(TEXT("Movement"));
 	const FName SystemActionGate(TEXT("ActionGate"));
+	const FName SystemAttributes(TEXT("Attributes"));
 	const FName SystemStatus(TEXT("Status"));
 
 	const FName CommandStartAction(TEXT("StartAction"));
@@ -18,6 +19,16 @@ namespace OmniMessageSchema
 
 namespace
 {
+	static bool IsAttributesOrStatusTarget(const FName TargetSystem)
+	{
+		return TargetSystem == OmniMessageSchema::SystemAttributes || TargetSystem == OmniMessageSchema::SystemStatus;
+	}
+
+	static bool IsAttributesOrStatusSource(const FName SourceSystem)
+	{
+		return SourceSystem == OmniMessageSchema::SystemAttributes || SourceSystem == OmniMessageSchema::SystemStatus;
+	}
+
 	static bool TryGetRequiredValue(const TMap<FName, FString>& Map, const FName Key, FString& OutValue, FString& OutError)
 	{
 		const FString* FoundValue = Map.Find(Key);
@@ -155,7 +166,7 @@ FOmniCommandMessage FOmniSetSprintingCommandSchema::ToMessage(const FOmniSetSpri
 {
 	FOmniCommandMessage Message;
 	Message.SourceSystem = Data.SourceSystem;
-	Message.TargetSystem = OmniMessageSchema::SystemStatus;
+	Message.TargetSystem = OmniMessageSchema::SystemAttributes;
 	Message.CommandName = OmniMessageSchema::CommandSetSprinting;
 	Message.Arguments.Add(TEXT("bSprinting"), Data.bSprinting ? TEXT("True") : TEXT("False"));
 	return Message;
@@ -189,7 +200,7 @@ bool FOmniSetSprintingCommandSchema::TryFromMessage(
 
 bool FOmniSetSprintingCommandSchema::Validate(const FOmniCommandMessage& Message, FString& OutError)
 {
-	if (Message.TargetSystem != OmniMessageSchema::SystemStatus || Message.CommandName != OmniMessageSchema::CommandSetSprinting)
+	if (!IsAttributesOrStatusTarget(Message.TargetSystem) || Message.CommandName != OmniMessageSchema::CommandSetSprinting)
 	{
 		OutError = TEXT("Command schema mismatch for SetSprinting.");
 		return false;
@@ -296,7 +307,7 @@ FOmniQueryMessage FOmniIsExhaustedQuerySchema::ToMessage(const FOmniIsExhaustedQ
 {
 	FOmniQueryMessage Message;
 	Message.SourceSystem = Data.SourceSystem;
-	Message.TargetSystem = OmniMessageSchema::SystemStatus;
+	Message.TargetSystem = OmniMessageSchema::SystemAttributes;
 	Message.QueryName = OmniMessageSchema::QueryIsExhausted;
 	return Message;
 }
@@ -326,7 +337,7 @@ bool FOmniIsExhaustedQuerySchema::TryFromMessage(
 
 bool FOmniIsExhaustedQuerySchema::Validate(const FOmniQueryMessage& Message, FString& OutError)
 {
-	if (Message.TargetSystem != OmniMessageSchema::SystemStatus || Message.QueryName != OmniMessageSchema::QueryIsExhausted)
+	if (!IsAttributesOrStatusTarget(Message.TargetSystem) || Message.QueryName != OmniMessageSchema::QueryIsExhausted)
 	{
 		OutError = TEXT("Query schema mismatch for IsExhausted.");
 		return false;
@@ -398,7 +409,7 @@ bool FOmniExhaustedEventSchema::TryFromMessage(
 
 bool FOmniExhaustedEventSchema::Validate(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (Message.SourceSystem != OmniMessageSchema::SystemStatus || Message.EventName != OmniMessageSchema::EventExhausted)
+	if (!IsAttributesOrStatusSource(Message.SourceSystem) || Message.EventName != OmniMessageSchema::EventExhausted)
 	{
 		OutError = TEXT("Event schema mismatch for Exhausted.");
 		return false;
@@ -448,7 +459,7 @@ bool FOmniExhaustedClearedEventSchema::TryFromMessage(
 
 bool FOmniExhaustedClearedEventSchema::Validate(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (Message.SourceSystem != OmniMessageSchema::SystemStatus || Message.EventName != OmniMessageSchema::EventExhaustedCleared)
+	if (!IsAttributesOrStatusSource(Message.SourceSystem) || Message.EventName != OmniMessageSchema::EventExhaustedCleared)
 	{
 		OutError = TEXT("Event schema mismatch for ExhaustedCleared.");
 		return false;
@@ -481,7 +492,7 @@ bool FOmniMessageSchemaValidator::ValidateCommand(const FOmniCommandMessage& Mes
 	{
 		return FOmniStopActionCommandSchema::Validate(Message, OutError);
 	}
-	if (Message.TargetSystem == OmniMessageSchema::SystemStatus && Message.CommandName == OmniMessageSchema::CommandSetSprinting)
+	if (IsAttributesOrStatusTarget(Message.TargetSystem) && Message.CommandName == OmniMessageSchema::CommandSetSprinting)
 	{
 		return FOmniSetSprintingCommandSchema::Validate(Message, OutError);
 	}
@@ -491,11 +502,11 @@ bool FOmniMessageSchemaValidator::ValidateCommand(const FOmniCommandMessage& Mes
 
 bool FOmniMessageSchemaValidator::ValidateEvent(const FOmniEventMessage& Message, FString& OutError)
 {
-	if (Message.SourceSystem == OmniMessageSchema::SystemStatus && Message.EventName == OmniMessageSchema::EventExhausted)
+	if (IsAttributesOrStatusSource(Message.SourceSystem) && Message.EventName == OmniMessageSchema::EventExhausted)
 	{
 		return FOmniExhaustedEventSchema::Validate(Message, OutError);
 	}
-	if (Message.SourceSystem == OmniMessageSchema::SystemStatus && Message.EventName == OmniMessageSchema::EventExhaustedCleared)
+	if (IsAttributesOrStatusSource(Message.SourceSystem) && Message.EventName == OmniMessageSchema::EventExhaustedCleared)
 	{
 		return FOmniExhaustedClearedEventSchema::Validate(Message, OutError);
 	}
@@ -509,7 +520,7 @@ bool FOmniMessageSchemaValidator::ValidateQuery(const FOmniQueryMessage& Message
 	{
 		return FOmniCanStartActionQuerySchema::Validate(Message, OutError);
 	}
-	if (Message.TargetSystem == OmniMessageSchema::SystemStatus && Message.QueryName == OmniMessageSchema::QueryIsExhausted)
+	if (IsAttributesOrStatusTarget(Message.TargetSystem) && Message.QueryName == OmniMessageSchema::QueryIsExhausted)
 	{
 		return FOmniIsExhaustedQuerySchema::Validate(Message, OutError);
 	}

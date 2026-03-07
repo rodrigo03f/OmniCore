@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
-#include "Systems/Attributes/OmniAttributeTypes.h"
 #include "Systems/Status/OmniStatusData.h"
 #include "Systems/OmniRuntimeSystem.h"
 #include "OmniStatusSystem.generated.h"
@@ -11,25 +10,22 @@ class UOmniManifest;
 class UOmniDebugSubsystem;
 class UOmniSystemRegistrySubsystem;
 class UOmniClockSubsystem;
-class UOmniAttributesRecipeDataAsset;
+class UOmniAttributesSystem;
 
 // Purpose:
-// - Manter atributos essenciais (HP/Stamina) de forma deterministica.
-// - Processar loop de stamina (drain/regen/exhausted) via tags de contexto.
-// - Responder queries de estado para outros systems.
+// - Orquestrar status temporarios (duracao, stacks, tick e tags de status).
+// - Publicar/expirar efeitos de status e sincronizar bridges (ex.: Modifiers).
 // Inputs:
-// - Recipe de atributos via config (DefaultGame.ini).
-// - Commands de systems (ex.: SetSprinting) e console (damage/heal).
-// - Tempo de simulacao via OmniClock.
+// - Commands/queries de status.
+// - Tempo de simulacao via OmniClock para expiracao deterministica.
 // Outputs:
-// - Snapshot de atributos (HP/Stamina/Exhausted).
-// - Gameplay tags de estado (Game.State.Exhausted).
-// - Telemetria de debug.
+// - Snapshot de status ativos.
+// - Gameplay tags agregadas (status + attributes) para compatibilidade temporaria.
+// - Telemetria de debug do slice de status.
 // Determinism:
-// - Evolucao de estado depende de recipe + tags + OmniClock.
-// - Sem uso de tempo de mundo no fluxo normal.
+// - Duracao/expiracao de status depende apenas de recipe + OmniClock.
+// - Ordenacao estavel de effects ativos e snapshot.
 // Failure modes:
-// - Recipe invalida/ausente => fallback deterministico com log acionavel.
 // - Payload invalido em command/query/event e rejeitado pelo contrato.
 UCLASS()
 class OMNIRUNTIME_API UOmniStatusSystem : public UOmniRuntimeSystem
@@ -47,37 +43,7 @@ public:
 	virtual bool HandleQuery_Implementation(FOmniQueryMessage& Query) override;
 	virtual void HandleEvent_Implementation(const FOmniEventMessage& Event) override;
 
-	UFUNCTION(BlueprintPure, Category = "Omni|Attributes")
-	FOmniAttributeSnapshot GetSnapshot() const;
-
-	UFUNCTION(BlueprintPure, Category = "Omni|Status")
-	float GetCurrentStamina() const;
-
-	UFUNCTION(BlueprintPure, Category = "Omni|Status")
-	float GetMaxStamina() const;
-
-	UFUNCTION(BlueprintPure, Category = "Omni|Status")
-	float GetStaminaNormalized() const;
-
-	UFUNCTION(BlueprintPure, Category = "Omni|Status")
-	bool IsExhausted() const;
-
 	const FGameplayTagContainer& GetStateTags() const;
-
-	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
-	void SetSprinting(bool bInSprinting);
-
-	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
-	void ConsumeStamina(float Amount);
-
-	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
-	void AddStamina(float Amount);
-
-	UFUNCTION(BlueprintCallable, Category = "Omni|Attributes")
-	void ApplyDamage(float Amount);
-
-	UFUNCTION(BlueprintCallable, Category = "Omni|Attributes")
-	void ApplyHeal(float Amount);
 
 	UFUNCTION(BlueprintCallable, Category = "Omni|Status")
 	bool ApplyStatus(FGameplayTag StatusTag, FName SourceId, float DurationOverrideSeconds = -1.0f);
@@ -101,37 +67,20 @@ private:
 		bool bInfiniteDuration = false;
 	};
 
-	bool TryLoadRecipeFromConfig(FString& OutError);
-	void ApplyFallbackRecipe();
 	void InitializeStatusRecipes();
-	void ResolveOfficialTags();
-	void InitializeSnapshot();
 	void RebuildStatusSnapshot(double NowSeconds);
 	bool ResolveClockDelta(float& OutDeltaTime);
-	void TickStamina(const float DeltaTime);
 	void TickStatusEffects(double NowSeconds);
 	int32 FindActiveStatusIndex(FGameplayTag StatusTag, FName SourceId) const;
 	void SortActiveStatusEffects();
 	void RefreshStatusTags();
+	void RefreshCombinedStateTags();
+	UOmniAttributesSystem* ResolveAttributesSystem() const;
 	void SyncStatusDrivenModifiers(FGameplayTag StatusTag, FName SourceId, bool bActive) const;
 	FName BuildStatusModifierSourceId(FGameplayTag StatusTag, FName SourceId) const;
-	FOmniAttributeValue* FindAttributeMutable(FGameplayTag AttributeTag);
-	const FOmniAttributeValue* FindAttribute(FGameplayTag AttributeTag) const;
-	void ClampAttribute(FOmniAttributeValue& Attribute) const;
-	void SetExhausted(bool bInExhausted);
-	void UpdateStateTags();
 	void PublishTelemetry();
 
 private:
-	// Core deterministic state map consumed by HUD/debug/query.
-	TMap<FGameplayTag, FOmniAttributeValue> AttributesByTag;
-
-	UPROPERTY(Transient)
-	FOmniStaminaRules StaminaRules;
-
-	UPROPERTY(Transient)
-	FOmniAttributeSnapshot Snapshot;
-
 	UPROPERTY(Transient)
 	FGameplayTagContainer ContextTags;
 
@@ -139,25 +88,7 @@ private:
 	FGameplayTagContainer StateTags;
 
 	UPROPERTY(Transient)
-	bool bExhausted = false;
-
-	UPROPERTY(Transient)
 	double LastClockSeconds = 0.0;
-
-	UPROPERTY(Transient)
-	float TimeSinceLastStaminaDrain = 0.0f;
-
-	UPROPERTY(Transient)
-	FGameplayTag HpTag;
-
-	UPROPERTY(Transient)
-	FGameplayTag StaminaTag;
-
-	UPROPERTY(Transient)
-	FGameplayTag SprintingStateTag;
-
-	UPROPERTY(Transient)
-	FGameplayTag ExhaustedStateTag;
 
 	UPROPERTY(Transient)
 	TMap<FGameplayTag, FOmniStatusRecipe> StatusRecipesByTag;
@@ -175,4 +106,7 @@ private:
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UOmniClockSubsystem> ClockSubsystem;
+
+	UPROPERTY(Transient)
+	mutable TWeakObjectPtr<UOmniAttributesSystem> AttributesSystem;
 };

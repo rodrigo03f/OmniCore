@@ -8,6 +8,7 @@ namespace OmniMessageSchema
 {
 	OMNICORE_API extern const FName SystemMovement;
 	OMNICORE_API extern const FName SystemActionGate;
+	OMNICORE_API extern const FName SystemAttributes;
 	OMNICORE_API extern const FName SystemStatus;
 
 	OMNICORE_API extern const FName CommandStartAction;

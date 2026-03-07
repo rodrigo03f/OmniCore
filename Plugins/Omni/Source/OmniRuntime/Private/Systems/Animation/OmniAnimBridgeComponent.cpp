@@ -8,16 +8,16 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
+#include "Systems/Attributes/OmniAttributesSystem.h"
 #include "Systems/Movement/OmniMovementSystem.h"
 #include "Systems/OmniSystemRegistrySubsystem.h"
-#include "Systems/Status/OmniStatusSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogOmniAnimBridgeComponent, Log, All);
 
 namespace OmniAnimBridge
 {
 	static const FName MovementSystemId(TEXT("Movement"));
-	static const FName StatusSystemId(TEXT("Status"));
+	static const FName AttributesSystemId(TEXT("Attributes"));
 	static const FName DefaultAnimSetTagName(TEXT("Game.Anim.Set.Default"));
 }
 
@@ -43,7 +43,7 @@ void UOmniAnimBridgeComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	(void)EndPlayReason;
 
-	StatusSystem.Reset();
+	AttributesSystem.Reset();
 	MovementSystem.Reset();
 	Registry.Reset();
 	OmniAnimInstance.Reset();
@@ -169,9 +169,9 @@ void UOmniAnimBridgeComponent::ResolveRegistryAndSystems()
 		MovementSystem = Cast<UOmniMovementSystem>(Registry->GetSystemById(OmniAnimBridge::MovementSystemId));
 	}
 
-	if (!StatusSystem.IsValid())
+	if (!AttributesSystem.IsValid())
 	{
-		StatusSystem = Cast<UOmniStatusSystem>(Registry->GetSystemById(OmniAnimBridge::StatusSystemId));
+		AttributesSystem = Cast<UOmniAttributesSystem>(Registry->GetSystemById(OmniAnimBridge::AttributesSystemId));
 	}
 }
 
@@ -290,7 +290,7 @@ void UOmniAnimBridgeComponent::ApplyOmniState()
 
 	DebugSpeed = HostPawn->GetVelocity().Size2D();
 	bDebugIsSprinting = MovementSystem.IsValid() && MovementSystem->IsSprinting();
-	bDebugIsExhausted = StatusSystem.IsValid() && StatusSystem->IsExhausted();
+	bDebugIsExhausted = AttributesSystem.IsValid() && AttributesSystem->IsExhausted();
 
 	FOmniAnimBridgeFrame BridgeFrame;
 	BridgeFrame.Speed = DebugSpeed;
